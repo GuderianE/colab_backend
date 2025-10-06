@@ -25,6 +25,18 @@ npm start
 
 The server will start on port 3000 by default (or the PORT environment variable if set).
 
+## Demo
+
+Once the server is running, open your browser to:
+- **http://localhost:3000/** - Interactive demo page with visual cursor tracking
+- **http://localhost:3000/health** - Health check endpoint
+
+To test multi-user collaboration:
+1. Open the demo page in multiple browser windows or tabs
+2. Each window will receive a unique user ID
+3. Move your mouse over the canvas to see real-time coordinate updates
+4. Watch as other users' cursors appear and move in real-time
+
 ## WebSocket Protocol
 
 ### Authentication
@@ -180,3 +192,20 @@ ws.onmessage = (event) => {
 - **ws**: WebSocket library for real-time communication
 - **uuid**: Generates unique user identifiers
 - **Workspaces**: Isolated collaboration spaces - messages are only broadcast within the same workspace
+
+## Testing
+
+Run the automated test client to verify all functionality:
+
+```bash
+node test-client.js
+```
+
+This will simulate two clients connecting, authenticating, and exchanging coordinate updates.
+
+## Files
+
+- `server.js` - Main WebSocket server implementation
+- `demo.html` - Interactive browser-based demo
+- `test-client.js` - Automated test client for validation
+- `package.json` - Node.js dependencies and scripts

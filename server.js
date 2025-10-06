@@ -1,9 +1,13 @@
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Serve static files (for demo page)
+app.use(express.static(path.join(__dirname)));
 
 // Create HTTP server
 const server = app.listen(PORT, () => {
@@ -189,6 +193,11 @@ app.get('/health', (req, res) => {
     workspaces: workspaces.size,
     timestamp: new Date().toISOString()
   });
+});
+
+// Root endpoint - redirect to demo page
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'demo.html'));
 });
 
 // Endpoint to get workspace info

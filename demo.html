@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Collaboration Demo</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      color: #333;
+      border-bottom: 2px solid #4CAF50;
+      padding-bottom: 10px;
+    }
+    .status {
+      padding: 10px;
+      margin: 20px 0;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    .status.disconnected {
+      background-color: #ffebee;
+      color: #c62828;
+    }
+    .status.connected {
+      background-color: #e8f5e9;
+      color: #2e7d32;
+    }
+    .input-group {
+      margin: 15px 0;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+      color: #555;
+    }
+    input, button {
+      padding: 10px;
+      font-size: 14px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+      margin-top: 10px;
+      width: 100%;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    button:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+    #canvas-container {
+      margin-top: 20px;
+      border: 2px solid #ddd;
+      border-radius: 4px;
+      position: relative;
+      background: white;
+    }
+    #canvas {
+      display: block;
+      cursor: crosshair;
+    }
+    .cursor {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      z-index: 100;
+      border: 2px solid white;
+      box-shadow: 0 0 5px rgba(0,0,0,0.3);
+    }
+    .cursor-label {
+      position: absolute;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 12px;
+      white-space: nowrap;
+      transform: translate(-50%, -30px);
+      pointer-events: none;
+    }
+    #log {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .log-entry {
+      padding: 4px 0;
+      border-bottom: 1px solid #eee;
+    }
+    .log-entry:last-child {
+      border-bottom: none;
+    }
+    .log-time {
+      color: #888;
+      margin-right: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🤝 Multi-User Collaboration Demo</h1>
+    
+    <div id="status" class="status disconnected">
+      Disconnected
+    </div>
+    
+    <div class="input-group">
+      <label for="token">Authentication Token:</label>
+      <input type="text" id="token" value="valid-token-123" placeholder="Enter token">
+    </div>
+    
+    <div class="input-group">
+      <label for="workspace">Workspace ID:</label>
+      <input type="text" id="workspace" value="demo-workspace" placeholder="Enter workspace ID">
+    </div>
+    
+    <button id="connectBtn" onclick="connect()">Connect</button>
+    <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+    
+    <div id="canvas-container" style="display:none;">
+      <canvas id="canvas" width="750" height="400"></canvas>
+    </div>
+    
+    <div id="log">
+      <div class="log-entry"><span class="log-time">--:--:--</span> Waiting to connect...</div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    let userId = null;
+    let cursors = new Map();
+    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F'];
+    let colorIndex = 0;
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      const logDiv = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="log-time">${time}</span>${message}`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function updateStatus(connected, message) {
+      const statusDiv = document.getElementById('status');
+      statusDiv.className = `status ${connected ? 'connected' : 'disconnected'}`;
+      statusDiv.textContent = message || (connected ? 'Connected' : 'Disconnected');
+    }
+
+    function connect() {
+      const token = document.getElementById('token').value;
+      const workspace = document.getElementById('workspace').value;
+      
+      if (!token || !workspace) {
+        alert('Please enter both token and workspace ID');
+        return;
+      }
+      
+      log('Connecting to server...');
+      ws = new WebSocket('ws://localhost:3000');
+      
+      ws.onopen = () => {
+        log('WebSocket connected, authenticating...');
+        ws.send(JSON.stringify({
+          type: 'auth',
+          token: token,
+          workspace: workspace
+        }));
+      };
+      
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        
+        if (message.type === 'auth_success') {
+          userId = message.userId;
+          updateStatus(true, `Connected as ${userId.substring(0, 8)}...`);
+          log(`✓ Authentication successful! User ID: ${userId}`);
+          log(`Workspace: ${message.workspaceId}`);
+          
+          if (message.users.length > 1) {
+            log(`${message.users.length - 1} other user(s) in workspace`);
+          }
+          
+          // Initialize other users' cursors
+          message.users.forEach(user => {
+            if (user.userId !== userId) {
+              createCursor(user.userId, user.coords);
+            }
+          });
+          
+          document.getElementById('connectBtn').disabled = true;
+          document.getElementById('disconnectBtn').disabled = false;
+          document.getElementById('canvas-container').style.display = 'block';
+          document.getElementById('token').disabled = true;
+          document.getElementById('workspace').disabled = true;
+        }
+        
+        if (message.type === 'coords_update') {
+          updateCursor(message.userId, message.coords);
+        }
+        
+        if (message.type === 'user_joined') {
+          log(`👤 User ${message.userId.substring(0, 8)}... joined`);
+          createCursor(message.userId, message.coords);
+        }
+        
+        if (message.type === 'user_left') {
+          log(`👋 User ${message.userId.substring(0, 8)}... left`);
+          removeCursor(message.userId);
+        }
+        
+        if (message.type === 'error') {
+          log(`❌ Error: ${message.message}`);
+          alert('Error: ' + message.message);
+        }
+      };
+      
+      ws.onerror = (error) => {
+        log('❌ WebSocket error occurred');
+        console.error('WebSocket error:', error);
+      };
+      
+      ws.onclose = () => {
+        log('Connection closed');
+        updateStatus(false);
+        document.getElementById('connectBtn').disabled = false;
+        document.getElementById('disconnectBtn').disabled = true;
+        document.getElementById('canvas-container').style.display = 'none';
+        document.getElementById('token').disabled = false;
+        document.getElementById('workspace').disabled = false;
+        cursors.clear();
+      };
+    }
+
+    function disconnect() {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+    }
+
+    function createCursor(cursorUserId, coords) {
+      if (cursors.has(cursorUserId)) return;
+      
+      const color = colors[colorIndex % colors.length];
+      colorIndex++;
+      
+      const cursor = document.createElement('div');
+      cursor.className = 'cursor';
+      cursor.style.backgroundColor = color;
+      cursor.style.left = coords.x + 'px';
+      cursor.style.top = coords.y + 'px';
+      
+      const label = document.createElement('div');
+      label.className = 'cursor-label';
+      label.textContent = cursorUserId.substring(0, 8);
+      label.style.left = coords.x + 'px';
+      label.style.top = coords.y + 'px';
+      
+      document.getElementById('canvas-container').appendChild(cursor);
+      document.getElementById('canvas-container').appendChild(label);
+      
+      cursors.set(cursorUserId, { cursor, label, color });
+    }
+
+    function updateCursor(cursorUserId, coords) {
+      const cursorData = cursors.get(cursorUserId);
+      if (!cursorData) {
+        createCursor(cursorUserId, coords);
+        return;
+      }
+      
+      cursorData.cursor.style.left = coords.x + 'px';
+      cursorData.cursor.style.top = coords.y + 'px';
+      cursorData.label.style.left = coords.x + 'px';
+      cursorData.label.style.top = coords.y + 'px';
+    }
+
+    function removeCursor(cursorUserId) {
+      const cursorData = cursors.get(cursorUserId);
+      if (cursorData) {
+        cursorData.cursor.remove();
+        cursorData.label.remove();
+        cursors.delete(cursorUserId);
+      }
+    }
+
+    // Track mouse movement on canvas
+    const canvas = document.getElementById('canvas');
+    canvas.addEventListener('mousemove', (e) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      ws.send(JSON.stringify({
+        type: 'update_coords',
+        x: Math.round(x),
+        y: Math.round(y)
+      }));
+    });
+  </script>
+</body>
+</html>
