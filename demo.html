@@ -1,339 +1,1040 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Collaboration Demo</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 800px;
-      margin: 50px auto;
-      padding: 20px;
-      background-color: #f5f5f5;
-    }
-    .container {
-      background: white;
-      padding: 30px;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    h1 {
-      color: #333;
-      border-bottom: 2px solid #4CAF50;
-      padding-bottom: 10px;
-    }
-    .status {
-      padding: 10px;
-      margin: 20px 0;
-      border-radius: 4px;
-      font-weight: bold;
-    }
-    .status.disconnected {
-      background-color: #ffebee;
-      color: #c62828;
-    }
-    .status.connected {
-      background-color: #e8f5e9;
-      color: #2e7d32;
-    }
-    .input-group {
-      margin: 15px 0;
-    }
-    label {
-      display: block;
-      margin-bottom: 5px;
-      font-weight: bold;
-      color: #555;
-    }
-    input, button {
-      padding: 10px;
-      font-size: 14px;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-    }
-    input {
-      width: 100%;
-      box-sizing: border-box;
-    }
-    button {
-      background-color: #4CAF50;
-      color: white;
-      border: none;
-      cursor: pointer;
-      margin-top: 10px;
-      width: 100%;
-    }
-    button:hover {
-      background-color: #45a049;
-    }
-    button:disabled {
-      background-color: #cccccc;
-      cursor: not-allowed;
-    }
-    #canvas-container {
-      margin-top: 20px;
-      border: 2px solid #ddd;
-      border-radius: 4px;
-      position: relative;
-      background: white;
-    }
-    #canvas {
-      display: block;
-      cursor: crosshair;
-    }
-    .cursor {
-      position: absolute;
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      pointer-events: none;
-      transform: translate(-50%, -50%);
-      z-index: 100;
-      border: 2px solid white;
-      box-shadow: 0 0 5px rgba(0,0,0,0.3);
-    }
-    .cursor-label {
-      position: absolute;
-      background: rgba(0,0,0,0.7);
-      color: white;
-      padding: 2px 6px;
-      border-radius: 3px;
-      font-size: 12px;
-      white-space: nowrap;
-      transform: translate(-50%, -30px);
-      pointer-events: none;
-    }
-    #log {
-      margin-top: 20px;
-      padding: 15px;
-      background: #f9f9f9;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      max-height: 300px;
-      overflow-y: auto;
-      font-family: monospace;
-      font-size: 12px;
-    }
-    .log-entry {
-      padding: 4px 0;
-      border-bottom: 1px solid #eee;
-    }
-    .log-entry:last-child {
-      border-bottom: none;
-    }
-    .log-time {
-      color: #888;
-      margin-right: 10px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Collaborative Scratch-like Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Workspace selector */
+        #workspace-selector {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            z-index: 1000;
+            min-width: 400px;
+        }
+
+        #workspace-selector h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        #workspace-selector input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        #workspace-selector button {
+            width: 100%;
+            padding: 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+
+        #workspace-selector button:hover {
+            background: #5a67d8;
+        }
+
+        #workspace-info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 100;
+        }
+
+        #workspace-info code {
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin: 0 5px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        #container {
+            display: flex;
+            height: 100vh;
+            background: white;
+        }
+
+        /* Code workspace (left side) */
+        #code-workspace {
+            width: 60%;
+            background: #f8f8f8;
+            border-right: 2px solid #ddd;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Stage area (right side) */
+        #stage-area {
+            width: 40%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #stage {
+            flex: 1;
+            background: white;
+            position: relative;
+            overflow: hidden;
+            border: 2px solid #ddd;
+            margin: 20px;
+        }
+
+        /* Permission controls slide-out panel */
+        #permission-panel {
+            position: fixed;
+            top: 0;
+            right: -360px; /* hidden by default */
+            height: 100vh;
+            width: 340px;
+            background: #fff;
+            padding: 20px 16px 80px;
+            box-shadow: -6px 0 24px rgba(0,0,0,0.12);
+            z-index: 1000;
+            transition: right 0.25s ease-in-out;
+            overflow-y: auto;
+        }
+        #permission-panel.open { right: 0; }
+        #permission-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1001;
+            background: #667eea;
+            color: #fff;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        #permission-panel h3 {
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: #333;
+        }
+
+        .quick-actions {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .quick-btn {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .quick-btn.blue {
+            background: #3182ce;
+            color: white;
+        }
+
+        .quick-btn.green {
+            background: #48bb78;
+            color: white;
+        }
+
+        .quick-btn.orange {
+            background: #ed8936;
+            color: white;
+        }
+
+        .quick-btn.red {
+            background: #f56565;
+            color: white;
+        }
+
+        .quick-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .permission-toggles {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .section-title {
+            margin-top: 16px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #333;
+        }
+        .student-select {
+            width: 100%;
+            padding: 8px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+
+        .permission-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px;
+            background: #f7f7f7;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .permission-toggle input[type="checkbox"] {
+            cursor: pointer;
+        }
+
+        /* User list */
+        #user-list {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 100;
+            min-width: 200px;
+        }
+
+        #user-list h3 {
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: #333;
+        }
+
+        .user-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px;
+            margin: 5px 0;
+            background: #f7f7f7;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .user-role {
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: #e0e0e0;
+            font-size: 10px;
+        }
+
+        .user-role.owner {
+            background: #ffd700;
+            color: #333;
+        }
+
+        /* Draggable blocks */
+        .code-block {
+            position: absolute;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: move;
+            user-select: none;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: box-shadow 0.2s;
+            z-index: 10;
+        }
+
+        .code-block.dragging {
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            z-index: 1000;
+            opacity: 0.9;
+        }
+
+        .code-block.remote-dragging {
+            border: 2px solid #ff6b6b;
+            animation: pulse 1s infinite;
+        }
+
+        .code-block.locked-by-other {
+            animation: shake 0.3s;
+            border: 2px solid red !important;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+            100% { transform: scale(1); }
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+
+        /* Block types */
+        .block-event {
+            background: #ffcc00;
+            color: #333;
+        }
+
+        .block-motion {
+            background: #4c97ff;
+            color: white;
+        }
+
+        .block-looks {
+            background: #9966ff;
+            color: white;
+        }
+
+        .block-control {
+            background: #ffab19;
+            color: white;
+        }
+
+        /* Sprite */
+        .sprite {
+            position: absolute;
+            cursor: move;
+            user-select: none;
+            transition: transform 0.1s;
+        }
+
+        .sprite img {
+            width: 80px;
+            height: 80px;
+            pointer-events: none;
+        }
+
+        .sprite.dragging {
+            z-index: 1000;
+            transform: scale(1.1);
+        }
+
+        .sprite.remote-dragging {
+            border: 2px solid #ff6b6b;
+            border-radius: 5px;
+            padding: 2px;
+        }
+
+        /* Cursor display */
+        .cursor {
+            position: fixed;
+            width: 20px;
+            height: 20px;
+            pointer-events: none;
+            z-index: 9999;
+            transition: transform 0.1s ease-out;
+        }
+
+        .cursor::before {
+            content: '➤';
+            font-size: 20px;
+            color: #ff6b6b;
+            transform: rotate(-45deg);
+            display: block;
+        }
+
+        .cursor-label {
+            position: absolute;
+            top: 20px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+
+        /* Connection status */
+        #status {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 8px 15px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 101;
+        }
+
+        .status-connected {
+            color: #48bb78;
+        }
+
+        .status-disconnected {
+            color: #f56565;
+        }
+
+        /* Toolbar */
+        #toolbar {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 100;
+        }
+
+        #user-count {
+            padding: 8px 15px;
+            background: #667eea;
+            color: white;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+
+        /* Blocks palette */
+        #blocks-palette {
+            position: absolute;
+            left: 20px;
+            top: 20px;
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 50;
+        }
+
+        .palette-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .palette-block {
+            padding: 8px 12px;
+            margin: 5px 0;
+            border-radius: 4px;
+            cursor: grab;
+            font-size: 14px;
+            transition: transform 0.2s;
+        }
+
+        #share-button {
+            padding: 5px 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+
+        #share-button:hover {
+            background: #5a67d8;
+        }
+
+        /* Notification toast */
+        .notification {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 20px;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            z-index: 10000;
+            animation: slideUp 0.3s ease-out;
+        }
+
+        .notification.info {
+            background: #3182ce;
+        }
+
+        .notification.error {
+            background: #f56565;
+        }
+
+        .notification.success {
+            background: #48bb78;
+        }
+
+        @keyframes slideUp {
+            from {
+                transform: translateX(-50%) translateY(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(-50%) translateY(0);
+                opacity: 1;
+            }
+        }
+    </style>
 </head>
 <body>
-  <div class="container">
-    <h1>🤝 Multi-User Collaboration Demo</h1>
-    
-    <div id="status" class="status disconnected">
-      Disconnected
+    <!-- Workspace Selector Modal -->
+    <div id="workspace-selector">
+        <h2>Join Collaborative Workspace</h2>
+        <p>Enter a workspace ID to join an existing session, or create a new one:</p>
+        <input type="text" id="workspace-input" placeholder="Enter workspace ID (or leave empty for new)">
+        <input type="text" id="username-input" placeholder="Enter your name">
+        <button onclick="joinWorkspace()">Join Workspace</button>
+        <p style="margin-top: 15px; font-size: 12px; color: #666;">
+            Share the workspace ID with others to collaborate in real-time!
+        </p>
     </div>
-    
-    <div class="input-group">
-      <label for="token">Authentication Token:</label>
-      <input type="text" id="token" value="valid-token-123" placeholder="Enter token">
-    </div>
-    
-    <div class="input-group">
-      <label for="workspace">Workspace ID:</label>
-      <input type="text" id="workspace" value="demo-workspace" placeholder="Enter workspace ID">
-    </div>
-    
-    <button id="connectBtn" onclick="connect()">Connect</button>
-    <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
-    
-    <div id="canvas-container" style="display:none;">
-      <canvas id="canvas" width="750" height="400"></canvas>
-    </div>
-    
-    <div id="log">
-      <div class="log-entry"><span class="log-time">--:--:--</span> Waiting to connect...</div>
-    </div>
-  </div>
 
-  <script>
-    let ws = null;
-    let userId = null;
-    let cursors = new Map();
-    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F'];
-    let colorIndex = 0;
+    <!-- Workspace Info -->
+    <div id="workspace-info" class="hidden">
+        Workspace: <code id="workspace-display"></code>
+        <button id="share-button" onclick="copyWorkspaceId()">Copy ID</button>
+        <button id="become-teacher-button" onclick="app.permissions.requestTeacherRole()" style="margin-left:10px; background:#ed8936; color:#fff; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Become Teacher</button>
+    </div>
 
-    function log(message) {
-      const time = new Date().toLocaleTimeString();
-      const logDiv = document.getElementById('log');
-      const entry = document.createElement('div');
-      entry.className = 'log-entry';
-      entry.innerHTML = `<span class="log-time">${time}</span>${message}`;
-      logDiv.appendChild(entry);
-      logDiv.scrollTop = logDiv.scrollHeight;
-    }
+    <!-- Permission Slide-out Panel (for owner/admin) -->
+    <button id="permission-toggle" class="hidden" onclick="togglePermissionPanel()">Permissions</button>
+    <div id="permission-panel" class="hidden">
+        <h3>Quick Controls</h3>
+        <div class="quick-actions">
+            <button class="quick-btn blue" onclick="app.permissions.setPresentationMode()">Presentation</button>
+            <button class="quick-btn green" onclick="app.permissions.setWorkMode()">Work Time</button>
+            <button class="quick-btn orange" onclick="app.permissions.setTestMode()">Test Mode</button>
+            <button class="quick-btn red" onclick="app.permissions.setRestrictedMode()">Lock All</button>
+        </div>
+        <h3>Global Permissions</h3>
+        <div class="permission-toggles" id="permission-toggles">
+            <!-- Will be populated dynamically -->
+        </div>
+        <div class="section-title">Per-Student Permissions</div>
+        <select id="student-select" class="student-select"></select>
+        <div class="permission-toggles" id="student-permission-toggles">
+            <!-- Will be populated dynamically -->
+        </div>
+    </div>
 
-    function updateStatus(connected, message) {
-      const statusDiv = document.getElementById('status');
-      statusDiv.className = `status ${connected ? 'connected' : 'disconnected'}`;
-      statusDiv.textContent = message || (connected ? 'Connected' : 'Disconnected');
-    }
+    <!-- User List -->
+    <div id="user-list" class="hidden">
+        <h3>Connected Users</h3>
+        <div id="user-list-content">
+            <!-- Will be populated dynamically -->
+        </div>
+    </div>
 
-    function connect() {
-      const token = document.getElementById('token').value;
-      const workspace = document.getElementById('workspace').value;
-      
-      if (!token || !workspace) {
-        alert('Please enter both token and workspace ID');
-        return;
-      }
-      
-      log('Connecting to server...');
-      ws = new WebSocket('ws://localhost:3000');
-      
-      ws.onopen = () => {
-        log('WebSocket connected, authenticating...');
-        ws.send(JSON.stringify({
-          type: 'auth',
-          token: token,
-          workspace: workspace
-        }));
-      };
-      
-      ws.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        
-        if (message.type === 'auth_success') {
-          userId = message.userId;
-          updateStatus(true, `Connected as ${userId.substring(0, 8)}...`);
-          log(`✓ Authentication successful! User ID: ${userId}`);
-          log(`Workspace: ${message.workspaceId}`);
-          
-          if (message.users.length > 1) {
-            log(`${message.users.length - 1} other user(s) in workspace`);
-          }
-          
-          // Initialize other users' cursors
-          message.users.forEach(user => {
-            if (user.userId !== userId) {
-              createCursor(user.userId, user.coords);
+    <div id="status" class="hidden">
+        <span class="status-disconnected">● Disconnected</span>
+    </div>
+
+    <div id="container" class="hidden">
+        <!-- Code Workspace -->
+        <div id="code-workspace">
+            <div id="blocks-palette">
+                <div class="palette-title">Blocks</div>
+                <div class="palette-block block-event" draggable="true" data-block-type="event">When 🏁 clicked</div>
+                <div class="palette-block block-motion" draggable="true" data-block-type="motion">Move 10 steps</div>
+                <div class="palette-block block-looks" draggable="true" data-block-type="looks">Say Hello!</div>
+                <div class="palette-block block-control" draggable="true" data-block-type="control">Wait 1 second</div>
+            </div>
+        </div>
+
+        <!-- Stage Area -->
+        <div id="stage-area">
+            <div id="stage">
+                <!-- Sprites will be added here -->
+            </div>
+        </div>
+    </div>
+
+    <div id="toolbar" class="hidden">
+        <span id="user-count">👥 1 user online</span>
+    </div>
+
+    <!-- Load the modular JavaScript files -->
+    <script src="websocket-client.js"></script>
+    <script src="permission-manager.js"></script>
+    <script src="collaboration-manager.js"></script>
+    <script src="app.js"></script>
+
+    <script>
+        // Store dragging state for elements
+        const draggingState = new Map();
+
+        // Override UI update methods in the app
+        app.updatePermissionUI = function(permissions) {
+            // Update UI elements based on permissions
+            const togglesContainer = document.getElementById('permission-toggles');
+            if (!togglesContainer) return;
+
+            // Update permission panel visibility
+            const permissionPanel = document.getElementById('permission-panel');
+            const permissionToggle = document.getElementById('permission-toggle');
+            if (permissions.canChangePermissions) {
+                permissionPanel.classList.remove('hidden');
+                permissionToggle.classList.remove('hidden');
             }
-          });
-          
-          document.getElementById('connectBtn').disabled = true;
-          document.getElementById('disconnectBtn').disabled = false;
-          document.getElementById('canvas-container').style.display = 'block';
-          document.getElementById('token').disabled = true;
-          document.getElementById('workspace').disabled = true;
-        }
-        
-        if (message.type === 'coords_update') {
-          updateCursor(message.userId, message.coords);
-        }
-        
-        if (message.type === 'user_joined') {
-          log(`👤 User ${message.userId.substring(0, 8)}... joined`);
-          createCursor(message.userId, message.coords);
-        }
-        
-        if (message.type === 'user_left') {
-          log(`👋 User ${message.userId.substring(0, 8)}... left`);
-          removeCursor(message.userId);
-        }
-        
-        if (message.type === 'error') {
-          log(`❌ Error: ${message.message}`);
-          alert('Error: ' + message.message);
-        }
-      };
-      
-      ws.onerror = (error) => {
-        log('❌ WebSocket error occurred');
-        console.error('WebSocket error:', error);
-      };
-      
-      ws.onclose = () => {
-        log('Connection closed');
-        updateStatus(false);
-        document.getElementById('connectBtn').disabled = false;
-        document.getElementById('disconnectBtn').disabled = true;
-        document.getElementById('canvas-container').style.display = 'none';
-        document.getElementById('token').disabled = false;
-        document.getElementById('workspace').disabled = false;
-        cursors.clear();
-      };
-    }
 
-    function disconnect() {
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-    }
+            // Disable/enable blocks based on permissions
+            const paletteBlocks = document.querySelectorAll('.palette-block');
+            paletteBlocks.forEach(block => {
+                block.style.opacity = permissions.canAddBlocks ? '1' : '0.5';
+                block.style.pointerEvents = permissions.canAddBlocks ? 'auto' : 'none';
+            });
+        };
 
-    function createCursor(cursorUserId, coords) {
-      if (cursors.has(cursorUserId)) return;
-      
-      const color = colors[colorIndex % colors.length];
-      colorIndex++;
-      
-      const cursor = document.createElement('div');
-      cursor.className = 'cursor';
-      cursor.style.backgroundColor = color;
-      cursor.style.left = coords.x + 'px';
-      cursor.style.top = coords.y + 'px';
-      
-      const label = document.createElement('div');
-      label.className = 'cursor-label';
-      label.textContent = cursorUserId.substring(0, 8);
-      label.style.left = coords.x + 'px';
-      label.style.top = coords.y + 'px';
-      
-      document.getElementById('canvas-container').appendChild(cursor);
-      document.getElementById('canvas-container').appendChild(label);
-      
-      cursors.set(cursorUserId, { cursor, label, color });
-    }
+        app.updateUserListUI = function(users) {
+            const userListContent = document.getElementById('user-list-content');
+            if (!userListContent) return;
 
-    function updateCursor(cursorUserId, coords) {
-      const cursorData = cursors.get(cursorUserId);
-      if (!cursorData) {
-        createCursor(cursorUserId, coords);
-        return;
-      }
-      
-      cursorData.cursor.style.left = coords.x + 'px';
-      cursorData.cursor.style.top = coords.y + 'px';
-      cursorData.label.style.left = coords.x + 'px';
-      cursorData.label.style.top = coords.y + 'px';
-    }
+            userListContent.innerHTML = '';
+            users.forEach(user => {
+                const userItem = document.createElement('div');
+                userItem.className = 'user-item';
+                userItem.innerHTML = `
+                    <span>${user.username}</span>
+                    <span class="user-role ${user.isOwner ? 'owner' : ''}">${user.isOwner ? 'Owner' : 'Student'}</span>
+                `;
+                userListContent.appendChild(userItem);
+            });
 
-    function removeCursor(cursorUserId) {
-      const cursorData = cursors.get(cursorUserId);
-      if (cursorData) {
-        cursorData.cursor.remove();
-        cursorData.label.remove();
-        cursors.delete(cursorUserId);
-      }
-    }
+            // Update user count
+            const userCount = document.getElementById('user-count');
+            if (userCount) {
+                userCount.textContent = `👥 ${users.length} user${users.length !== 1 ? 's' : ''} online`;
+            }
 
-    // Track mouse movement on canvas
-    const canvas = document.getElementById('canvas');
-    canvas.addEventListener('mousemove', (e) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      
-      ws.send(JSON.stringify({
-        type: 'update_coords',
-        x: Math.round(x),
-        y: Math.round(y)
-      }));
-    });
-  </script>
+            // Populate student selector (non-owner and not me first)
+            const select = document.getElementById('student-select');
+            if (select) {
+                const myId = app.wsClient.userId;
+                const sorted = users.slice().sort((a,b)=> (a.isOwner?1:0) - (b.isOwner?1:0));
+                select.innerHTML = '';
+                sorted.forEach(u => {
+                    const opt = document.createElement('option');
+                    opt.value = u.userId;
+                    opt.textContent = `${u.username}${u.isOwner ? ' (Owner)' : ''}${u.userId===myId ? ' (You)' : ''}`;
+                    select.appendChild(opt);
+                });
+                // Build toggles for selected
+                buildStudentPermissionToggles(select.value);
+                select.onchange = () => buildStudentPermissionToggles(select.value);
+            }
+        };
+
+        app.updateConnectionStatus = function(connected) {
+            const status = document.querySelector('#status span');
+            if (status) {
+                status.className = connected ? 'status-connected' : 'status-disconnected';
+                status.textContent = connected ? '● Connected' : '● Disconnected';
+            }
+        };
+
+        app.showNotification = function(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.style.animation = 'slideUp 0.3s ease-out reverse';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        };
+
+        app.handleLockGranted = function(elementId, version) {
+            console.log('Lock granted for:', elementId);
+            const state = draggingState.get(elementId);
+            if (state && state.pending) {
+                // Start actual dragging now that we have the lock
+                state.isDragging = true;
+                state.pending = false;
+                const element = document.getElementById(elementId);
+                if (element) {
+                    element.classList.add('dragging');
+                }
+            }
+        };
+
+        app.handleLockDenied = function(elementId, lockedBy) {
+            console.log('Lock denied for:', elementId);
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.classList.add('locked-by-other');
+                setTimeout(() => {
+                    element.classList.remove('locked-by-other');
+                }, 500);
+            }
+            // Clear dragging state
+            draggingState.delete(elementId);
+            app.showNotification('Element is being edited by another user', 'error');
+        };
+
+        app.updateElementLockUI = function(elementId, isLocked, lockedBy) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                if (isLocked && lockedBy !== app.wsClient.userId) {
+                    element.classList.add('remote-dragging');
+                } else {
+                    element.classList.remove('remote-dragging');
+                }
+            }
+        };
+
+        // Override the block position update to actually move the element
+        app.updateBlockPosition = function(blockId, position) {
+            const block = document.getElementById(blockId);
+            if (block) {
+                block.style.left = position.x + 'px';
+                block.style.top = position.y + 'px';
+            }
+        };
+
+        app.updateSpritePosition = function(spriteId, x, y) {
+            const sprite = document.getElementById(spriteId);
+            if (sprite) {
+                sprite.style.left = x + 'px';
+                sprite.style.top = y + 'px';
+            }
+        };
+
+        // Handle element creation from remote users
+        app.collaboration.onElementCreated = function(elementType, elementData, createdBy) {
+            if (createdBy !== app.wsClient.userId) {
+                if (elementType === 'block') {
+                    const block = document.createElement('div');
+                    block.id = elementData.id;
+                    block.className = `code-block block-${elementData.type}`;
+                    block.textContent = elementData.text;
+                    block.style.left = elementData.position.x + 'px';
+                    block.style.top = elementData.position.y + 'px';
+                    
+                    makeDraggable(block, 'block');
+                    document.getElementById('code-workspace').appendChild(block);
+                }
+            }
+        };
+
+        app.createCursorUI = function(userId) {
+            const cursor = document.createElement('div');
+            cursor.className = 'cursor';
+            cursor.id = `cursor-${userId}`;
+            
+            const label = document.createElement('div');
+            label.className = 'cursor-label';
+            const user = app.permissions.users.get(userId);
+            label.textContent = user ? user.username : 'User';
+            
+            cursor.appendChild(label);
+            document.body.appendChild(cursor);
+        };
+
+        app.updateCursorUI = function(userId, coords) {
+            const cursor = document.getElementById(`cursor-${userId}`);
+            if (cursor) {
+                cursor.style.left = coords.x + 'px';
+                cursor.style.top = coords.y + 'px';
+            }
+        };
+
+        app.removeCursorUI = function(userId) {
+            const cursor = document.getElementById(`cursor-${userId}`);
+            if (cursor) {
+                cursor.remove();
+            }
+        };
+
+        app.onAuthenticated = function(data) {
+            // Hide selector, show workspace
+            document.getElementById('workspace-selector').classList.add('hidden');
+            document.getElementById('workspace-info').classList.remove('hidden');
+            document.getElementById('container').classList.remove('hidden');
+            document.getElementById('status').classList.remove('hidden');
+            document.getElementById('toolbar').classList.remove('hidden');
+            document.getElementById('user-list').classList.remove('hidden');
+
+            // Display workspace ID
+            document.getElementById('workspace-display').textContent = data.workspaceId;
+
+            // Setup permission toggles if user can manage permissions
+            if (data.permissions.canChangePermissions) {
+                setupPermissionToggles();
+            }
+
+            // Create initial elements
+            createInitialElements();
+        };
+
+        // Helper functions
+        function joinWorkspace() {
+            const workspaceInput = document.getElementById('workspace-input');
+            const usernameInput = document.getElementById('username-input');
+            const workspaceId = workspaceInput.value.trim() || generateWorkspaceId();
+            const username = usernameInput.value.trim() || 'Anonymous';
+
+            app.connect('demo-token-789', workspaceId, username);
+        }
+
+        function generateWorkspaceId() {
+            return 'workspace-' + Math.random().toString(36).substr(2, 9);
+        }
+
+        function copyWorkspaceId() {
+            const workspaceId = document.getElementById('workspace-display').textContent;
+            navigator.clipboard.writeText(workspaceId).then(() => {
+                app.showNotification('Workspace ID copied to clipboard!', 'success');
+            });
+        }
+
+        function setupPermissionToggles() {
+            const permissions = [
+                { key: 'canEditBlocks', label: '✏️ Edit Blocks' },
+                { key: 'canAddBlocks', label: '➕ Add Blocks' },
+                { key: 'canDeleteBlocks', label: '🗑️ Delete Blocks' },
+                { key: 'canEditSprites', label: '🎨 Edit Sprites' },
+                { key: 'canRunCode', label: '▶️ Run Code' },
+                { key: 'canChat', label: '💬 Chat' }
+            ];
+
+            const container = document.getElementById('permission-toggles');
+            container.innerHTML = '';
+
+            permissions.forEach(perm => {
+                const toggle = document.createElement('label');
+                toggle.className = 'permission-toggle';
+                toggle.innerHTML = `
+                    <span>${perm.label}</span>
+                    <input type="checkbox" onchange="app.permissions.updateGlobalPermission('${perm.key}', this.checked)">
+                `;
+                container.appendChild(toggle);
+            });
+        }
+
+        function buildStudentPermissionToggles(targetUserId) {
+            const permissions = [
+                { key: 'canEditBlocks', label: '✏️ Edit Blocks' },
+                { key: 'canAddBlocks', label: '➕ Add Blocks' },
+                { key: 'canDeleteBlocks', label: '🗑️ Delete Blocks' },
+                { key: 'canEditSprites', label: '🎨 Edit Sprites' },
+                { key: 'canRunCode', label: '▶️ Run Code' },
+                { key: 'canChat', label: '💬 Chat' }
+            ];
+
+            const container = document.getElementById('student-permission-toggles');
+            container.innerHTML = '';
+            const user = app.permissions.users.get(targetUserId);
+            permissions.forEach(perm => {
+                const isChecked = user?.permissions ? !!user.permissions[perm.key] : false;
+                const row = document.createElement('label');
+                row.className = 'permission-toggle';
+                row.innerHTML = `
+                    <span>${perm.label}</span>
+                    <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="app.permissions.updateUserPermission('${targetUserId}', '${perm.key}', this.checked)">
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        function togglePermissionPanel() {
+            const panel = document.getElementById('permission-panel');
+            panel.classList.toggle('open');
+        }
+
+        function createInitialElements() {
+            // Create some initial blocks
+            const blockTypes = [
+                { id: 'block-1', type: 'event', text: 'When 🏁 clicked', x: 50, y: 50 },
+                { id: 'block-2', type: 'motion', text: 'Move 10 steps', x: 50, y: 110 },
+                { id: 'block-3', type: 'looks', text: 'Say Hello!', x: 50, y: 170 }
+            ];
+
+            blockTypes.forEach(blockData => {
+                const block = document.createElement('div');
+                block.id = blockData.id;
+                block.className = `code-block block-${blockData.type}`;
+                block.textContent = blockData.text;
+                block.style.left = blockData.x + 'px';
+                block.style.top = blockData.y + 'px';
+                
+                makeDraggable(block, 'block');
+                document.getElementById('code-workspace').appendChild(block);
+            });
+
+            // Create a sprite
+            const sprite = document.createElement('div');
+            sprite.id = 'sprite-1';
+            sprite.className = 'sprite';
+            sprite.innerHTML = '<img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHZpZXdCb3g9IjAgMCA4MCA4MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iNDAiIGN5PSI0MCIgcj0iMzUiIGZpbGw9IiNGRjZCNkIiLz4KPGNpcmNsZSBjeD0iMzAiIGN5PSIzNSIgcj0iNSIgZmlsbD0iYmxhY2siLz4KPGNpcmNsZSBjeD0iNTAiIGN5PSIzNSIgcj0iNSIgZmlsbD0iYmxhY2siLz4KPHBhdGggZD0iTTMwIDUwIFE0MCAgNjAgNTAgNTAiIHN0cm9rZT0iYmxhY2siIHN0cm9rZS13aWR0aD0iMyIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+Cjwvc3ZnPg==" alt="Sprite">';
+            sprite.style.left = '100px';
+            sprite.style.top = '100px';
+            
+            makeDraggable(sprite, 'sprite');
+            document.getElementById('stage').appendChild(sprite);
+        }
+
+        function makeDraggable(element, elementType) {
+            element.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                
+                // Get initial position
+                const rect = element.getBoundingClientRect();
+                const parent = element.parentElement.getBoundingClientRect();
+                
+                // Store dragging state
+                draggingState.set(element.id, {
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    initialX: rect.left - parent.left,
+                    initialY: rect.top - parent.top,
+                    isDragging: false,
+                    pending: true,
+                    elementType: elementType
+                });
+
+                // Request lock
+                app.collaboration.requestLock(element.id, elementType);
+            });
+        }
+
+        // Global mouse move handler
+        document.addEventListener('mousemove', (e) => {
+            draggingState.forEach((state, elementId) => {
+                if (state.isDragging) {
+                    const element = document.getElementById(elementId);
+                    if (!element) return;
+
+                    const dx = e.clientX - state.startX;
+                    const dy = e.clientY - state.startY;
+                    
+                    const newX = state.initialX + dx;
+                    const newY = state.initialY + dy;
+                    
+                    element.style.left = newX + 'px';
+                    element.style.top = newY + 'px';
+
+                    // Send position update
+                    app.collaboration.updateElementPosition(elementId, state.elementType, { x: newX, y: newY });
+                }
+            });
+        });
+
+        // Global mouse up handler
+        document.addEventListener('mouseup', () => {
+            draggingState.forEach((state, elementId) => {
+                if (state.isDragging) {
+                    const element = document.getElementById(elementId);
+                    if (element) {
+                        element.classList.remove('dragging');
+                        
+                        // Release lock
+                        const finalX = parseInt(element.style.left);
+                        const finalY = parseInt(element.style.top);
+                        app.collaboration.releaseLock(elementId, { x: finalX, y: finalY });
+                    }
+                }
+            });
+            // Clear all dragging states
+            draggingState.clear();
+        });
+
+        // Setup drag and drop for palette blocks
+        document.querySelectorAll('.palette-block').forEach(paletteBlock => {
+            paletteBlock.addEventListener('dragstart', (e) => {
+                if (!app.permissions.hasPermission('canAddBlocks')) {
+                    e.preventDefault();
+                    app.showNotification('You do not have permission to add blocks', 'error');
+                    return;
+                }
+                e.dataTransfer.setData('blockType', paletteBlock.dataset.blockType);
+                e.dataTransfer.setData('blockText', paletteBlock.textContent);
+            });
+        });
+
+        document.getElementById('code-workspace').addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        document.getElementById('code-workspace').addEventListener('drop', (e) => {
+            e.preventDefault();
+            
+            const blockType = e.dataTransfer.getData('blockType');
+            const blockText = e.dataTransfer.getData('blockText');
+            
+            if (blockType) {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                const blockId = 'block-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                const blockData = {
+                    id: blockId,
+                    type: blockType,
+                    text: blockText,
+                    position: { x, y }
+                };
+                
+                // Create the block locally
+                const block = document.createElement('div');
+                block.id = blockId;
+                block.className = `code-block block-${blockType}`;
+                block.textContent = blockText;
+                block.style.left = x + 'px';
+                block.style.top = y + 'px';
+                
+                makeDraggable(block, 'block');
+                document.getElementById('code-workspace').appendChild(block);
+                
+                // Notify server about new element
+                app.collaboration.createElement('block', blockData);
+            }
+        });
+
+        // Handle Enter key in workspace input
+        document.getElementById('workspace-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                joinWorkspace();
+            }
+        });
+
+        document.getElementById('username-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                joinWorkspace();
+            }
+        });
+
+        // Focus on workspace input
+        document.getElementById('workspace-input').focus();
+    </script>
 </body>
 </html>
