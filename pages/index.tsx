@@ -58,6 +58,16 @@ function generateWorkspaceId(): string {
   return `workspace-${Math.random().toString(36).slice(2, 11)}`;
 }
 
+function resolveWebSocketUrl(): string {
+  if (typeof window === 'undefined') {
+    return 'ws://localhost:4000/ws';
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = window.location.host;
+  const path = window.location.pathname.startsWith('/api/collab') ? '/api/collab/ws' : '/ws';
+  return `${protocol}//${host}${path}`;
+}
+
 function parseLaunchParams(): LaunchParams {
   if (typeof window === 'undefined') {
     return { workspaceId: '', username: '', userId: '', ticket: '', autoJoin: false };
@@ -119,7 +129,7 @@ export default function Home() {
 
   useEffect(() => {
     const app = new CollaborativeApp({
-      wsUrl: `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`,
+      wsUrl: resolveWebSocketUrl(),
       debug: true
     });
 
