@@ -44,7 +44,7 @@ Server defaults to port `4000` unless `PORT` is set.
 ```json
 {
   "type": "auth",
-  "token": "demo-token-789",
+  "token": "<signed-join-ticket>",
   "workspace": "my-workspace-id",
   "username": "Elias",
   "userId": "platform-user-123"
@@ -97,11 +97,14 @@ Server defaults to port `4000` unless `PORT` is set.
 }
 ```
 
-## Valid Demo Tokens
+## Join Ticket Verification
 
-- `valid-token-123`
-- `test-token-456`
-- `demo-token-789`
+- WebSocket auth now validates `token` as a signed JWT join ticket.
+- Required claim set: `sub` (platform user id), `workspaceId`, `aud=colab-backend`, valid `exp`.
+- Shared signing secret is read from:
+1. `COLAB_JOIN_TOKEN_SECRET`
+2. `CRON_SECRET` (fallback)
+- In non-production only, a local dev fallback secret is used when neither env var is set.
 
 ## Project Structure
 
@@ -113,6 +116,5 @@ Server defaults to port `4000` unless `PORT` is set.
 ## Integration Notes for Your Platform
 
 - Keep your own frontend and connect to this server via websocket (`ws://host:port/ws`).
-- Authenticate with `type: "auth"` and include the platform `userId`.
+- Authenticate with `type: "auth"` using a short-lived platform-issued join ticket.
 - Mirror the message types used in `server.ts` (`request_lock`, `block_move`, etc.).
-- Replace hardcoded demo token validation with your platform auth middleware.

@@ -2,6 +2,7 @@ import http from 'node:http';
 import express from 'express';
 import next from 'next';
 import WebSocket, { WebSocketServer } from 'ws';
+import { jwtVerify, type JWTPayload } from 'jose';
 import PermissionManagerBackend from './permission-manager-backend';
 import type { Coordinates, PermissionSet } from './types/collaboration';
 
@@ -27,11 +28,57 @@ const workspaces = new Map<string, Map<string, ClientState>>();
 const workspaceLocks = new Map<string, Map<string, { lockedBy: string; version: number }>>();
 const permissionManager = new PermissionManagerBackend();
 
-const validTokens = new Set(['valid-token-123', 'test-token-456', 'demo-token-789']);
+type JoinTicketPayload = JWTPayload & {
+  workspaceId?: unknown;
+  username?: unknown;
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null;
 };
+
+function resolveJoinSecret(): string {
+  const configured = process.env.COLAB_JOIN_TOKEN_SECRET?.trim();
+  if (configured) return configured;
+
+  const shared = process.env.CRON_SECRET?.trim();
+  if (shared) return shared;
+
+  if (process.env.NODE_ENV !== 'production') {
+    return 'dev-colab-join-secret';
+  }
+
+  return '';
+}
+
+const JOIN_SECRET = resolveJoinSecret();
+const joinSecretKey = JOIN_SECRET ? new TextEncoder().encode(JOIN_SECRET) : null;
+if (!joinSecretKey) {
+  console.error('COLAB_JOIN_TOKEN_SECRET (or CRON_SECRET) is not configured; join tickets will be rejected.');
+}
+
+async function verifyJoinTicket(token: string): Promise<{ userId: string; workspaceId: string; username: string } | null> {
+  if (!joinSecretKey) {
+    return null;
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, joinSecretKey, {
+      algorithms: ['HS256'],
+      audience: 'colab-backend',
+    });
+    const typed = payload as JoinTicketPayload;
+    const userId = normalizeUserId(payload.sub);
+    const workspaceId = normalizeWorkspaceId(typed.workspaceId);
+    const username = typeof typed.username === 'string' ? typed.username.trim().slice(0, 64) : '';
+    if (!userId || !workspaceId) {
+      return null;
+    }
+    return { userId, workspaceId, username };
+  } catch {
+    return null;
+  }
+}
 
 function broadcastToWorkspace(workspaceId: string, senderId: string | null, message: unknown): void {
   const workspace = workspaces.get(workspaceId);
@@ -87,7 +134,7 @@ nextApp.prepare().then(() => {
 
     console.log('New WebSocket connection established');
 
-    ws.on('message', (message) => {
+    ws.on('message', async (message) => {
       try {
         const parsed = JSON.parse(message.toString()) as unknown;
         if (!isRecord(parsed)) {
@@ -99,30 +146,36 @@ nextApp.prepare().then(() => {
 
         switch (type) {
           case 'auth': {
-            const token = data.token;
-            const workspace = normalizeWorkspaceId(data.workspace);
+            const token = typeof data.token === 'string' ? data.token.trim() : '';
+            if (!token) {
+              ws.send(JSON.stringify({ type: 'error', message: 'Missing join ticket' }));
+              ws.close();
+              return;
+            }
+
+            const ticketClaims = await verifyJoinTicket(token);
+            if (!ticketClaims) {
+              ws.send(JSON.stringify({ type: 'error', message: 'Invalid or expired join ticket' }));
+              ws.close();
+              return;
+            }
+
+            const providedWorkspace = normalizeWorkspaceId(data.workspace);
+            if (providedWorkspace && providedWorkspace !== ticketClaims.workspaceId) {
+              ws.send(JSON.stringify({ type: 'error', message: 'Workspace mismatch in join ticket' }));
+              ws.close();
+              return;
+            }
+
             const providedUserId = normalizeUserId(data.userId);
-
-            if (typeof token !== 'string' || !validTokens.has(token)) {
-              ws.send(JSON.stringify({ type: 'error', message: 'Invalid token' }));
+            if (providedUserId && providedUserId !== ticketClaims.userId) {
+              ws.send(JSON.stringify({ type: 'error', message: 'User mismatch in join ticket' }));
               ws.close();
               return;
             }
 
-            if (!providedUserId) {
-              ws.send(JSON.stringify({ type: 'error', message: 'Missing or invalid userId' }));
-              ws.close();
-              return;
-            }
-
-            if (!workspace) {
-              ws.send(JSON.stringify({ type: 'error', message: 'Missing or invalid workspace' }));
-              ws.close();
-              return;
-            }
-
-            userId = providedUserId;
-            workspaceId = workspace;
+            userId = ticketClaims.userId;
+            workspaceId = ticketClaims.workspaceId;
             isAuthenticated = true;
 
             if (!workspaces.has(workspaceId)) {
@@ -148,7 +201,8 @@ nextApp.prepare().then(() => {
               permissionManager.initializeWorkspace(workspaceId, userId);
             }
 
-            const username = typeof data.username === 'string' && data.username ? data.username : 'Anonymous';
+            const usernameFromClient = typeof data.username === 'string' ? data.username.trim().slice(0, 64) : '';
+            const username = ticketClaims.username || usernameFromClient || 'User';
             const user: ClientState = {
               id: userId,
               username,

@@ -3,7 +3,6 @@ import { useEffect, useRef } from 'react';
 import type { Coordinates, PermissionSet } from '../types/collaboration';
 import CollaborativeApp from '../lib/client/CollaborativeApp';
 
-const DEMO_TOKEN = 'demo-token-789';
 const MANAGED_PERMISSIONS: Array<{ key: keyof PermissionSet; label: string }> = [
   { key: 'canEditBlocks', label: '✏️ Edit Blocks' },
   { key: 'canAddBlocks', label: '➕ Add Blocks' },
@@ -45,6 +44,7 @@ type LaunchParams = {
   workspaceId: string;
   username: string;
   userId: string;
+  ticket: string;
   autoJoin: boolean;
 };
 
@@ -60,7 +60,7 @@ function generateWorkspaceId(): string {
 
 function parseLaunchParams(): LaunchParams {
   if (typeof window === 'undefined') {
-    return { workspaceId: '', username: '', userId: '', autoJoin: false };
+    return { workspaceId: '', username: '', userId: '', ticket: '', autoJoin: false };
   }
 
   const params = new URLSearchParams(window.location.search);
@@ -70,6 +70,7 @@ function parseLaunchParams(): LaunchParams {
     workspaceId: (params.get('workspace') ?? params.get('workspaceId') ?? '').trim(),
     username: (params.get('username') ?? params.get('name') ?? '').trim(),
     userId: (params.get('userId') ?? '').trim(),
+    ticket: (params.get('ticket') ?? '').trim(),
     autoJoin: autoJoinRaw === '1' || autoJoinRaw === 'true' || autoJoinRaw === 'yes'
   };
 }
@@ -82,20 +83,22 @@ export default function Home() {
     const workspaceInput = document.getElementById('workspace-input') as HTMLInputElement | null;
     const usernameInput = document.getElementById('username-input') as HTMLInputElement | null;
     const userIdInput = document.getElementById('user-id-input') as HTMLInputElement | null;
+    const ticketInput = document.getElementById('ticket-input') as HTMLInputElement | null;
     const app = appRef.current;
 
-    if (!workspaceInput || !usernameInput || !userIdInput || !app) return;
+    if (!workspaceInput || !usernameInput || !userIdInput || !ticketInput || !app) return;
 
     const workspaceId = workspaceInput.value.trim() || generateWorkspaceId();
     const username = usernameInput.value.trim() || 'Anonymous';
     const userId = userIdInput.value.trim();
+    const ticket = ticketInput.value.trim();
 
-    if (!userId) {
-      app.showNotification('User ID is required (provided by platform)', 'error');
+    if (!ticket) {
+      app.showNotification('Join ticket is required (issued by platform)', 'error');
       return;
     }
 
-    app.connect(DEMO_TOKEN, workspaceId, username, userId);
+    app.connect(ticket, workspaceId, username, userId);
   };
 
   const copyWorkspaceId = async () => {
@@ -498,6 +501,7 @@ export default function Home() {
     const workspaceInput = document.getElementById('workspace-input');
     const usernameInput = document.getElementById('username-input');
     const userIdInput = document.getElementById('user-id-input');
+    const ticketInput = document.getElementById('ticket-input');
     const paletteBlocks = Array.from(document.querySelectorAll('.palette-block'));
     const launchParams = parseLaunchParams();
 
@@ -511,14 +515,18 @@ export default function Home() {
       userIdInput.value = launchParams.userId;
       userIdInput.readOnly = true;
     }
+    if (ticketInput instanceof HTMLInputElement && launchParams.ticket) {
+      ticketInput.value = launchParams.ticket;
+      ticketInput.readOnly = true;
+    }
 
     if (launchParams.autoJoin) {
-      if (launchParams.workspaceId && launchParams.userId) {
+      if (launchParams.workspaceId && launchParams.ticket) {
         window.setTimeout(() => {
           joinWorkspace();
         }, 0);
       } else {
-        app.showNotification('autojoin requires workspace and userId query params', 'error');
+        app.showNotification('autojoin requires workspace and ticket query params', 'error');
       }
     }
 
@@ -580,6 +588,7 @@ export default function Home() {
     workspaceInput?.addEventListener('keypress', handleJoinWithEnter as EventListener);
     usernameInput?.addEventListener('keypress', handleJoinWithEnter as EventListener);
     userIdInput?.addEventListener('keypress', handleJoinWithEnter as EventListener);
+    ticketInput?.addEventListener('keypress', handleJoinWithEnter as EventListener);
     (workspaceInput as HTMLElement | null)?.focus();
 
     return () => {
@@ -591,6 +600,7 @@ export default function Home() {
       workspaceInput?.removeEventListener('keypress', handleJoinWithEnter as EventListener);
       usernameInput?.removeEventListener('keypress', handleJoinWithEnter as EventListener);
       userIdInput?.removeEventListener('keypress', handleJoinWithEnter as EventListener);
+      ticketInput?.removeEventListener('keypress', handleJoinWithEnter as EventListener);
       if (codeWorkspace) {
         codeWorkspace.removeEventListener('dragover', handleDragOver);
         codeWorkspace.removeEventListener('drop', handleDrop);
@@ -615,7 +625,8 @@ export default function Home() {
         <p>Enter a workspace ID to join an existing session, or create a new one:</p>
         <input type="text" id="workspace-input" placeholder="Enter workspace ID (or leave empty for new)" />
         <input type="text" id="username-input" placeholder="Enter your name" />
-        <input type="text" id="user-id-input" placeholder="Platform user ID (required)" />
+        <input type="text" id="user-id-input" placeholder="Platform user ID (optional, auto-derived)" />
+        <input type="text" id="ticket-input" placeholder="Platform join ticket (required)" />
         <button onClick={joinWorkspace}>Join Workspace</button>
         <p className="workspace-help">Share the workspace ID with others to collaborate in real-time!</p>
       </div>
