@@ -57,7 +57,23 @@ if (!joinSecretKey) {
   console.error('COLAB_JOIN_TOKEN_SECRET (or CRON_SECRET) is not configured; join tickets will be rejected.');
 }
 
-async function verifyJoinTicket(token: string): Promise<{ userId: string; workspaceId: string; username: string } | null> {
+const consumedTicketIds = new Map<string, number>();
+
+function pruneConsumedTicketIds(nowSeconds: number): void {
+  consumedTicketIds.forEach((expiresAt, ticketId) => {
+    if (expiresAt <= nowSeconds) {
+      consumedTicketIds.delete(ticketId);
+    }
+  });
+}
+
+async function verifyJoinTicket(token: string): Promise<{
+  userId: string;
+  workspaceId: string;
+  username: string;
+  ticketId: string;
+  expiresAt: number;
+} | null> {
   if (!joinSecretKey) {
     return null;
   }
@@ -71,10 +87,12 @@ async function verifyJoinTicket(token: string): Promise<{ userId: string; worksp
     const userId = normalizeUserId(payload.sub);
     const workspaceId = normalizeWorkspaceId(typed.workspaceId);
     const username = typeof typed.username === 'string' ? typed.username.trim().slice(0, 64) : '';
-    if (!userId || !workspaceId) {
+    const ticketId = typeof payload.jti === 'string' ? payload.jti.trim() : '';
+    const expiresAt = typeof payload.exp === 'number' ? payload.exp : 0;
+    if (!userId || !workspaceId || !ticketId || !expiresAt) {
       return null;
     }
-    return { userId, workspaceId, username };
+    return { userId, workspaceId, username, ticketId, expiresAt };
   } catch {
     return null;
   }
@@ -149,30 +167,39 @@ nextApp.prepare().then(() => {
             const token = typeof data.token === 'string' ? data.token.trim() : '';
             if (!token) {
               ws.send(JSON.stringify({ type: 'error', message: 'Missing join ticket' }));
-              ws.close();
+              ws.close(4003, 'Missing join ticket');
               return;
             }
 
             const ticketClaims = await verifyJoinTicket(token);
             if (!ticketClaims) {
               ws.send(JSON.stringify({ type: 'error', message: 'Invalid or expired join ticket' }));
-              ws.close();
+              ws.close(4003, 'Invalid join ticket');
+              return;
+            }
+
+            pruneConsumedTicketIds(Math.floor(Date.now() / 1000));
+            if (consumedTicketIds.has(ticketClaims.ticketId)) {
+              ws.send(JSON.stringify({ type: 'error', message: 'Join ticket has already been used' }));
+              ws.close(4003, 'Replay detected');
               return;
             }
 
             const providedWorkspace = normalizeWorkspaceId(data.workspace);
             if (providedWorkspace && providedWorkspace !== ticketClaims.workspaceId) {
               ws.send(JSON.stringify({ type: 'error', message: 'Workspace mismatch in join ticket' }));
-              ws.close();
+              ws.close(4003, 'Workspace mismatch');
               return;
             }
 
             const providedUserId = normalizeUserId(data.userId);
             if (providedUserId && providedUserId !== ticketClaims.userId) {
               ws.send(JSON.stringify({ type: 'error', message: 'User mismatch in join ticket' }));
-              ws.close();
+              ws.close(4003, 'User mismatch');
               return;
             }
+
+            consumedTicketIds.set(ticketClaims.ticketId, ticketClaims.expiresAt);
 
             userId = ticketClaims.userId;
             workspaceId = ticketClaims.workspaceId;

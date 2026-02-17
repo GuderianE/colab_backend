@@ -116,11 +116,19 @@ export default class WebSocketClient {
         }
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event) => {
         this.isAuthenticated = false;
-        if (this.config.debug) console.log('WebSocket disconnected');
+        if (this.config.debug) console.log('WebSocket disconnected', event.code, event.reason);
 
         this.eventListeners.onClose.forEach((handler) => handler());
+
+        const isAuthFailure = event.code === 4003;
+        if (isAuthFailure) {
+          if (this.config.debug) {
+            console.log('Reconnect disabled due to auth failure');
+          }
+          return;
+        }
 
         if (this.reconnectAttempts < this.config.maxReconnectAttempts) {
           this.reconnectAttempts += 1;
