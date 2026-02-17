@@ -41,6 +41,13 @@ type BlockPayload = {
   position: Coordinates;
 };
 
+type LaunchParams = {
+  workspaceId: string;
+  username: string;
+  userId: string;
+  autoJoin: boolean;
+};
+
 declare global {
   interface Window {
     app?: CollaborativeApp;
@@ -49,6 +56,22 @@ declare global {
 
 function generateWorkspaceId(): string {
   return `workspace-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+function parseLaunchParams(): LaunchParams {
+  if (typeof window === 'undefined') {
+    return { workspaceId: '', username: '', userId: '', autoJoin: false };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const autoJoinRaw = (params.get('autojoin') ?? params.get('autoJoin') ?? '').trim().toLowerCase();
+
+  return {
+    workspaceId: (params.get('workspace') ?? params.get('workspaceId') ?? '').trim(),
+    username: (params.get('username') ?? params.get('name') ?? '').trim(),
+    userId: (params.get('userId') ?? '').trim(),
+    autoJoin: autoJoinRaw === '1' || autoJoinRaw === 'true' || autoJoinRaw === 'yes'
+  };
 }
 
 export default function Home() {
@@ -476,6 +499,28 @@ export default function Home() {
     const usernameInput = document.getElementById('username-input');
     const userIdInput = document.getElementById('user-id-input');
     const paletteBlocks = Array.from(document.querySelectorAll('.palette-block'));
+    const launchParams = parseLaunchParams();
+
+    if (workspaceInput instanceof HTMLInputElement && launchParams.workspaceId) {
+      workspaceInput.value = launchParams.workspaceId;
+    }
+    if (usernameInput instanceof HTMLInputElement && launchParams.username) {
+      usernameInput.value = launchParams.username;
+    }
+    if (userIdInput instanceof HTMLInputElement && launchParams.userId) {
+      userIdInput.value = launchParams.userId;
+      userIdInput.readOnly = true;
+    }
+
+    if (launchParams.autoJoin) {
+      if (launchParams.workspaceId && launchParams.userId) {
+        window.setTimeout(() => {
+          joinWorkspace();
+        }, 0);
+      } else {
+        app.showNotification('autojoin requires workspace and userId query params', 'error');
+      }
+    }
 
     const handleDrop = (e: DragEvent) => {
       e.preventDefault();
