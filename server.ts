@@ -304,6 +304,37 @@ nextApp.prepare().then(() => {
             break;
           }
 
+          case 'update_username': {
+            if (!isAuthenticated || !workspaceId || !userId) return;
+
+            const nextUsername = typeof data.username === 'string' ? data.username.trim().slice(0, 64) : '';
+            if (!nextUsername) {
+              ws.send(JSON.stringify({ type: 'error', message: 'Username is required' }));
+              return;
+            }
+
+            const wsUsers = workspaces.get(workspaceId);
+            const client = wsUsers?.get(userId);
+            if (!client) return;
+
+            client.username = nextUsername;
+
+            ws.send(
+              JSON.stringify({
+                type: 'user_updated',
+                userId,
+                username: nextUsername
+              })
+            );
+
+            broadcastToWorkspace(workspaceId, userId, {
+              type: 'user_updated',
+              userId,
+              username: nextUsername
+            });
+            break;
+          }
+
           case 'update_global_permission': {
             if (!isAuthenticated || !workspaceId || !userId) return;
 

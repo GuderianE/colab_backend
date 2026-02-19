@@ -2,7 +2,7 @@ import type { CollaborationMessage, PermissionSet } from '../../types/collaborat
 import type { AuthSuccessPayload } from './WebSocketClient';
 import type WebSocketClient from './WebSocketClient';
 
-type CollaborationUser = {
+export type CollaborationUser = {
   userId: string;
   username: string;
   isOwner: boolean;
@@ -113,6 +113,14 @@ export default class PermissionManager {
 
   updateUserPermission(targetUserId: string, permission: keyof PermissionSet, value: boolean): void {
     this.wsClient.send({ type: 'update_user_permission', targetUserId, permission, value });
+  }
+
+  updateUsername(username: string): boolean {
+    const normalized = username.trim().slice(0, 64);
+    if (!normalized) {
+      return false;
+    }
+    return this.wsClient.send({ type: 'update_username', username: normalized });
   }
 
   setPresentationMode(): void {

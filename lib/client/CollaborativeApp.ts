@@ -1,6 +1,6 @@
 import type { Coordinates, PermissionSet } from '../../types/collaboration';
 import CollaborationManager from './CollaborationManager';
-import PermissionManager from './PermissionManager';
+import PermissionManager, { type CollaborationUser } from './PermissionManager';
 import WebSocketClient, { type AuthSuccessPayload } from './WebSocketClient';
 
 type AppConfig = {
@@ -19,8 +19,6 @@ export default class CollaborativeApp {
 
   collaboration: CollaborationManager;
 
-  mouseMoveHandler: ((event: MouseEvent) => void) | null;
-
   constructor(config: AppConfig = {}) {
     this.wsClient = new WebSocketClient({
       url: config.wsUrl,
@@ -29,7 +27,6 @@ export default class CollaborativeApp {
 
     this.permissions = new PermissionManager(this.wsClient);
     this.collaboration = new CollaborationManager(this.wsClient, this.permissions);
-    this.mouseMoveHandler = null;
 
     this.setupUICallbacks();
     this.setupEventHandlers();
@@ -105,14 +102,6 @@ export default class CollaborativeApp {
   }
 
   setupEventHandlers(): void {
-    this.mouseMoveHandler = (e) => {
-      if (this.wsClient.isConnected()) {
-        this.collaboration.updateCursorPosition(e.clientX, e.clientY);
-      }
-    };
-
-    document.addEventListener('mousemove', this.mouseMoveHandler);
-
     this.wsClient.addEventListener('onOpen', () => {
       this.updateConnectionStatus(true);
     });
@@ -149,10 +138,29 @@ export default class CollaborativeApp {
     this.collaboration.releaseLock(elementId, { x: finalX, y: finalY });
   }
 
-  destroy(): void {
-    if (this.mouseMoveHandler) {
-      document.removeEventListener('mousemove', this.mouseMoveHandler);
+  updateCursorPosition(x: number, y: number): void {
+    if (this.wsClient.isConnected()) {
+      this.collaboration.updateCursorPosition(x, y);
     }
+  }
+
+  canManagePermissions(): boolean {
+    return this.permissions.hasPermission('canChangePermissions');
+  }
+
+  getJoinedUsersCount(): number {
+    return this.permissions.users.size;
+  }
+
+  getUsers(): CollaborationUser[] {
+    return Array.from(this.permissions.users.values());
+  }
+
+  updateMyUsername(username: string): boolean {
+    return this.permissions.updateUsername(username);
+  }
+
+  destroy(): void {
     this.disconnect();
   }
 
@@ -189,19 +197,11 @@ export default class CollaborativeApp {
   }
 
   updateBlockPosition(blockId: string, position: Coordinates): void {
-    const block = document.getElementById(blockId);
-    if (block) {
-      block.style.left = `${position.x}px`;
-      block.style.top = `${position.y}px`;
-    }
+    console.log('Block moved:', blockId, position);
   }
 
   updateSpritePosition(spriteId: string, x: number, y: number): void {
-    const sprite = document.getElementById(spriteId);
-    if (sprite) {
-      sprite.style.left = `${x}px`;
-      sprite.style.top = `${y}px`;
-    }
+    console.log('Sprite moved:', spriteId, x, y);
   }
 
   createCursorUI(userId: string): void {

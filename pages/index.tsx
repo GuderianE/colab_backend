@@ -259,6 +259,22 @@ export default function Home() {
       });
     };
 
+    const getAvatarInitials = (username: string) => {
+      const parts = username.trim().split(/\s+/).filter(Boolean);
+      if (parts.length === 0) return 'U';
+      if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+      return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase();
+    };
+
+    const getAvatarColor = (userId: string) => {
+      let hash = 0;
+      for (let i = 0; i < userId.length; i += 1) {
+        hash = (hash * 31 + userId.charCodeAt(i)) | 0;
+      }
+      const hue = Math.abs(hash) % 360;
+      return `hsl(${hue}, 62%, 46%)`;
+    };
+
     app.updatePermissionUI = (permissions) => {
       const permissionPanel = document.getElementById('permission-panel');
       const permissionToggle = document.getElementById('permission-toggle');
@@ -266,11 +282,14 @@ export default function Home() {
       const readOnlyNotice = document.getElementById('permission-readonly-note');
       const studentSelect = document.getElementById('student-select') as HTMLSelectElement | null;
       const canChangePermissions = !!permissions.canChangePermissions;
-      const showPermissionControls = canChangePermissions || launchParams.overlay;
 
-      if (showPermissionControls) {
+      if (canChangePermissions) {
         permissionPanel?.classList.remove('hidden');
         permissionToggle?.classList.remove('hidden');
+      } else {
+        permissionPanel?.classList.add('hidden');
+        permissionPanel?.classList.remove('open');
+        permissionToggle?.classList.add('hidden');
       }
       if (canChangePermissions && document.getElementById('permission-toggles')?.childElementCount === 0) {
         setupPermissionToggles();
@@ -279,7 +298,7 @@ export default function Home() {
         ownerControls.classList.toggle('hidden', !canChangePermissions);
       }
       if (readOnlyNotice) {
-        readOnlyNotice.classList.toggle('hidden', canChangePermissions);
+        readOnlyNotice.classList.add('hidden');
       }
       if (studentSelect) {
         studentSelect.disabled = !canChangePermissions;
@@ -317,34 +336,63 @@ export default function Home() {
     };
 
     app.updateUserListUI = (users) => {
-      const userListContent = document.getElementById('user-list-content');
-      if (!userListContent) return;
+      const myId = app.wsClient.userId;
+      const circles = document.getElementById('presence-circles');
+      if (circles) {
+        circles.innerHTML = '';
+        const sorted = users
+          .slice()
+          .sort((a, b) => {
+            if (a.userId === myId) return -1;
+            if (b.userId === myId) return 1;
+            if (a.isOwner && !b.isOwner) return -1;
+            if (!a.isOwner && b.isOwner) return 1;
+            return a.username.localeCompare(b.username);
+          });
 
-      userListContent.innerHTML = '';
-      users.forEach((user) => {
-        const userItem = document.createElement('div');
-        userItem.className = 'user-item';
+        sorted.forEach((user) => {
+          const circle = document.createElement('button');
+          circle.type = 'button';
+          circle.className = 'presence-circle';
+          if (user.isOwner) {
+            circle.classList.add('owner');
+          }
 
-        const username = document.createElement('span');
-        username.textContent = user.username;
+          circle.style.background = getAvatarColor(user.userId);
+          circle.textContent = getAvatarInitials(user.username);
+          circle.title = `${user.username}${user.isOwner ? ' (Owner)' : ''}${
+            user.userId === myId ? ' (You)' : ''
+          }`;
 
-        const role = document.createElement('span');
-        role.className = `user-role ${user.isOwner ? 'owner' : ''}`;
-        role.textContent = user.isOwner ? 'Owner' : 'Student';
+          if (user.userId === myId) {
+            circle.classList.add('self');
+            circle.addEventListener('click', () => {
+              const nextName = window.prompt('Update your display name', user.username);
+              if (!nextName) return;
 
-        userItem.appendChild(username);
-        userItem.appendChild(role);
-        userListContent.appendChild(userItem);
-      });
+              const normalized = nextName.trim();
+              if (!normalized || normalized === user.username) return;
 
-      const userCount = document.getElementById('user-count');
-      if (userCount) {
-        userCount.textContent = `👥 ${users.length} user${users.length !== 1 ? 's' : ''} online`;
+              const updated = app.updateMyUsername(normalized);
+              if (!updated) {
+                app.showNotification('Unable to update your name while disconnected', 'error');
+              }
+            });
+          } else {
+            circle.disabled = true;
+          }
+
+          circles.appendChild(circle);
+        });
+      }
+
+      const joinedCount = document.getElementById('joined-count');
+      if (joinedCount) {
+        joinedCount.textContent = `${users.length} joined`;
       }
 
       const select = document.getElementById('student-select') as HTMLSelectElement | null;
       if (select) {
-        const myId = app.wsClient.userId;
         const sorted = users.slice().sort((a, b) => (a.isOwner ? 1 : 0) - (b.isOwner ? 1 : 0));
         select.innerHTML = '';
 
@@ -483,16 +531,17 @@ export default function Home() {
     app.onAuthenticated = (data) => {
       document.getElementById('workspace-selector')?.classList.add('hidden');
       document.getElementById('workspace-info')?.classList.remove('hidden');
+      document.getElementById('presence-hud')?.classList.remove('hidden');
 
       if (!launchParams.overlay) {
         document.getElementById('container')?.classList.remove('hidden');
         document.getElementById('status')?.classList.remove('hidden');
-        document.getElementById('toolbar')?.classList.remove('hidden');
-        document.getElementById('user-list')?.classList.remove('hidden');
       } else {
-        document.getElementById('permission-toggle')?.classList.remove('hidden');
-        document.getElementById('permission-panel')?.classList.remove('hidden');
-        document.getElementById('permission-panel')?.classList.add('open');
+        if (data.permissions.canChangePermissions) {
+          document.getElementById('permission-toggle')?.classList.remove('hidden');
+          document.getElementById('permission-panel')?.classList.remove('hidden');
+          document.getElementById('permission-panel')?.classList.add('open');
+        }
       }
 
       const workspaceDisplay = document.getElementById('workspace-display');
@@ -508,6 +557,8 @@ export default function Home() {
     };
 
     const handleDragMove = (e: MouseEvent) => {
+      app.updateCursorPosition(e.clientX, e.clientY);
+
       draggingState.forEach((state, elementId) => {
         if (!state.isDragging) return;
 
@@ -733,9 +784,9 @@ export default function Home() {
         </div>
       </div>
 
-      <div id="user-list" className="hidden">
-        <h3>Connected Users</h3>
-        <div id="user-list-content" />
+      <div id="presence-hud" className="hidden">
+        <div id="joined-count">0 joined</div>
+        <div id="presence-circles" />
       </div>
 
       <div id="status" className="hidden">
@@ -766,9 +817,6 @@ export default function Home() {
         </div>
       </div>
 
-      <div id="toolbar" className="hidden">
-        <span id="user-count">👥 1 user online</span>
-      </div>
     </>
   );
 }

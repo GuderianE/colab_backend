@@ -97,6 +97,15 @@ Server defaults to port `4000` unless `PORT` is set.
 }
 ```
 
+### Update Username
+
+```json
+{
+  "type": "update_username",
+  "username": "New Display Name"
+}
+```
+
 ## Join Ticket Verification
 
 - WebSocket auth now validates `token` as a signed JWT join ticket.
@@ -119,11 +128,18 @@ Server defaults to port `4000` unless `PORT` is set.
 - Keep your own frontend and connect to this server via websocket (`ws://host:port/ws`).
 - Authenticate with `type: "auth"` using a short-lived platform-issued join ticket.
 - Mirror the message types used in `server.ts` (`request_lock`, `block_move`, etc.).
+- Keep Colab headless: UI should live in your Scriptum frontend.
 
-### Overlay Controls on Top of Scratch
+### Scriptum UI Contract
 
-You can render only the collaboration controls as a floating overlay by loading:
+- Show the permissions button only when `canChangePermissions === true`.
+- Show joined users from the live `users` list (`joinedUsersCount = users.length`).
+- Render users as stacked top-right circles using `username` and `userId`.
+- When a user clicks their own circle, call `app.updateMyUsername(nextName)` (or `app.permissions.updateUsername(nextName)`).
 
-`/?overlay=1&workspace=<id>&username=<name>&userId=<platform-user-id>&ticket=<join-ticket>&autojoin=1`
+For convenience, use `buildScriptumTopRightState` in `lib/client/ScriptumUiState.ts` to derive:
+- `showPermissionsButton`
+- `joinedUsersCount`
+- `circles[]` (id, name, initials, self, owner)
 
-This mode hides the local demo canvas and keeps only the join/permission UI so it can be embedded over Scratch (for example via a small iframe in the top-right corner).
+The Next.js page at `/` remains a demo harness only.

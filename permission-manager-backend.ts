@@ -133,7 +133,7 @@ export default class PermissionManagerBackend {
     }
 
     if (workspace.userPermissions.has(userId)) {
-      return workspace.userPermissions.get(userId) as PermissionSet;
+      return workspace.userPermissions.get(userId);
     }
 
     return workspace.globalPermissions;
