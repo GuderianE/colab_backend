@@ -119,3 +119,11 @@ Server defaults to port `4000` unless `PORT` is set.
 - Keep your own frontend and connect to this server via websocket (`ws://host:port/ws`).
 - Authenticate with `type: "auth"` using a short-lived platform-issued join ticket.
 - Mirror the message types used in `server.ts` (`request_lock`, `block_move`, etc.).
+
+### Overlay Controls on Top of Scratch
+
+You can render only the collaboration controls as a floating overlay by loading:
+
+`/?overlay=1&workspace=<id>&username=<name>&userId=<platform-user-id>&ticket=<join-ticket>&autojoin=1`
+
+This mode hides the local demo canvas and keeps only the join/permission UI so it can be embedded over Scratch (for example via a small iframe in the top-right corner).

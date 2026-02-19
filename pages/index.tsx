@@ -46,6 +46,7 @@ type LaunchParams = {
   userId: string;
   ticket: string;
   autoJoin: boolean;
+  overlay: boolean;
 };
 
 declare global {
@@ -70,18 +71,21 @@ function resolveWebSocketUrl(): string {
 
 function parseLaunchParams(): LaunchParams {
   if (typeof window === 'undefined') {
-    return { workspaceId: '', username: '', userId: '', ticket: '', autoJoin: false };
+    return { workspaceId: '', username: '', userId: '', ticket: '', autoJoin: false, overlay: false };
   }
 
   const params = new URLSearchParams(window.location.search);
-  const autoJoinRaw = (params.get('autojoin') ?? params.get('autoJoin') ?? '').trim().toLowerCase();
+  const parseBooleanParam = (raw: string) => ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+  const autoJoinRaw = (params.get('autojoin') ?? params.get('autoJoin') ?? '').trim();
+  const overlayRaw = (params.get('overlay') ?? params.get('embedded') ?? '').trim();
 
   return {
     workspaceId: (params.get('workspace') ?? params.get('workspaceId') ?? '').trim(),
     username: (params.get('username') ?? params.get('name') ?? '').trim(),
     userId: (params.get('userId') ?? '').trim(),
     ticket: (params.get('ticket') ?? '').trim(),
-    autoJoin: autoJoinRaw === '1' || autoJoinRaw === 'true' || autoJoinRaw === 'yes'
+    autoJoin: parseBooleanParam(autoJoinRaw),
+    overlay: parseBooleanParam(overlayRaw)
   };
 }
 
@@ -128,6 +132,7 @@ export default function Home() {
   };
 
   useEffect(() => {
+    const launchParams = parseLaunchParams();
     const app = new CollaborativeApp({
       wsUrl: resolveWebSocketUrl(),
       debug: true
@@ -137,6 +142,11 @@ export default function Home() {
     window.app = app;
 
     const draggingState = draggingStateRef.current;
+
+    if (launchParams.overlay) {
+      document.body.classList.add('overlay-mode');
+      document.getElementById('__next')?.classList.add('overlay-mode');
+    }
 
     const makeDraggable = (element: HTMLElement, elementType: 'block' | 'sprite') => {
       element.addEventListener('mousedown', (e: MouseEvent) => {
@@ -252,11 +262,34 @@ export default function Home() {
     app.updatePermissionUI = (permissions) => {
       const permissionPanel = document.getElementById('permission-panel');
       const permissionToggle = document.getElementById('permission-toggle');
+      const ownerControls = document.getElementById('owner-controls');
+      const readOnlyNotice = document.getElementById('permission-readonly-note');
+      const studentSelect = document.getElementById('student-select') as HTMLSelectElement | null;
+      const canChangePermissions = !!permissions.canChangePermissions;
+      const showPermissionControls = canChangePermissions || launchParams.overlay;
 
-      if (permissions.canChangePermissions) {
+      if (showPermissionControls) {
         permissionPanel?.classList.remove('hidden');
         permissionToggle?.classList.remove('hidden');
       }
+      if (canChangePermissions && document.getElementById('permission-toggles')?.childElementCount === 0) {
+        setupPermissionToggles();
+      }
+      if (ownerControls) {
+        ownerControls.classList.toggle('hidden', !canChangePermissions);
+      }
+      if (readOnlyNotice) {
+        readOnlyNotice.classList.toggle('hidden', canChangePermissions);
+      }
+      if (studentSelect) {
+        studentSelect.disabled = !canChangePermissions;
+      }
+
+      const modeButtons = document.querySelectorAll('.quick-btn');
+      modeButtons.forEach((btn) => {
+        const button = btn as HTMLButtonElement;
+        button.disabled = !canChangePermissions;
+      });
 
       const paletteBlocks = document.querySelectorAll('.palette-block');
       paletteBlocks.forEach((block) => {
@@ -269,8 +302,17 @@ export default function Home() {
       permissionToggles.forEach((toggle, index) => {
         const permission = MANAGED_PERMISSIONS[index];
         if (permission) {
-          (toggle as HTMLInputElement).checked = !!permissions[permission.key];
+          const input = toggle as HTMLInputElement;
+          input.checked = !!permissions[permission.key];
+          input.disabled = !canChangePermissions;
         }
+      });
+
+      const studentPermissionToggles = document.querySelectorAll(
+        '#student-permission-toggles input[type="checkbox"]'
+      );
+      studentPermissionToggles.forEach((toggle) => {
+        (toggle as HTMLInputElement).disabled = !canChangePermissions;
       });
     };
 
@@ -441,10 +483,17 @@ export default function Home() {
     app.onAuthenticated = (data) => {
       document.getElementById('workspace-selector')?.classList.add('hidden');
       document.getElementById('workspace-info')?.classList.remove('hidden');
-      document.getElementById('container')?.classList.remove('hidden');
-      document.getElementById('status')?.classList.remove('hidden');
-      document.getElementById('toolbar')?.classList.remove('hidden');
-      document.getElementById('user-list')?.classList.remove('hidden');
+
+      if (!launchParams.overlay) {
+        document.getElementById('container')?.classList.remove('hidden');
+        document.getElementById('status')?.classList.remove('hidden');
+        document.getElementById('toolbar')?.classList.remove('hidden');
+        document.getElementById('user-list')?.classList.remove('hidden');
+      } else {
+        document.getElementById('permission-toggle')?.classList.remove('hidden');
+        document.getElementById('permission-panel')?.classList.remove('hidden');
+        document.getElementById('permission-panel')?.classList.add('open');
+      }
 
       const workspaceDisplay = document.getElementById('workspace-display');
       if (workspaceDisplay) {
@@ -513,7 +562,6 @@ export default function Home() {
     const userIdInput = document.getElementById('user-id-input');
     const ticketInput = document.getElementById('ticket-input');
     const paletteBlocks = Array.from(document.querySelectorAll('.palette-block'));
-    const launchParams = parseLaunchParams();
 
     if (workspaceInput instanceof HTMLInputElement && launchParams.workspaceId) {
       workspaceInput.value = launchParams.workspaceId;
@@ -620,6 +668,8 @@ export default function Home() {
       delete window.app;
       appRef.current = null;
       draggingState.clear();
+      document.body.classList.remove('overlay-mode');
+      document.getElementById('__next')?.classList.remove('overlay-mode');
     };
   }, []);
 
@@ -652,29 +702,35 @@ export default function Home() {
       </div>
 
       <button id="permission-toggle" className="hidden" onClick={togglePermissionPanel}>
-        Permissions
+        Colab Controls
       </button>
       <div id="permission-panel" className="hidden">
-        <h3>Quick Controls</h3>
-        <div className="quick-actions">
-          <button className="quick-btn blue" onClick={() => appRef.current?.permissions.setPresentationMode()}>
-            Presentation
-          </button>
-          <button className="quick-btn green" onClick={() => appRef.current?.permissions.setWorkMode()}>
-            Work Time
-          </button>
-          <button className="quick-btn orange" onClick={() => appRef.current?.permissions.setTestMode()}>
-            Test Mode
-          </button>
-          <button className="quick-btn red" onClick={() => appRef.current?.permissions.setRestrictedMode()}>
-            Lock All
-          </button>
+        <h3>Collaboration Options</h3>
+        <div id="permission-readonly-note" className="permission-note hidden">
+          View-only mode. Request teacher role to manage permissions.
         </div>
-        <h3>Global Permissions</h3>
-        <div className="permission-toggles" id="permission-toggles" />
-        <div className="section-title">Per-Student Permissions</div>
-        <select id="student-select" className="student-select" />
-        <div className="permission-toggles" id="student-permission-toggles" />
+        <div id="owner-controls" className="hidden">
+          <h3>Quick Controls</h3>
+          <div className="quick-actions">
+            <button className="quick-btn blue" onClick={() => appRef.current?.permissions.setPresentationMode()}>
+              Presentation
+            </button>
+            <button className="quick-btn green" onClick={() => appRef.current?.permissions.setWorkMode()}>
+              Work Time
+            </button>
+            <button className="quick-btn orange" onClick={() => appRef.current?.permissions.setTestMode()}>
+              Test Mode
+            </button>
+            <button className="quick-btn red" onClick={() => appRef.current?.permissions.setRestrictedMode()}>
+              Lock All
+            </button>
+          </div>
+          <h3>Global Permissions</h3>
+          <div className="permission-toggles" id="permission-toggles" />
+          <div className="section-title">Per-Student Permissions</div>
+          <select id="student-select" className="student-select" />
+          <div className="permission-toggles" id="student-permission-toggles" />
+        </div>
       </div>
 
       <div id="user-list" className="hidden">

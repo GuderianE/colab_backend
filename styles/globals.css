@@ -98,6 +98,52 @@ body {
   display: none !important;
 }
 
+body.overlay-mode {
+  background: transparent;
+  overflow: visible;
+}
+
+body.overlay-mode #container,
+body.overlay-mode #toolbar,
+body.overlay-mode #status,
+body.overlay-mode #user-list,
+body.overlay-mode #workspace-info {
+  display: none !important;
+}
+
+body.overlay-mode #workspace-selector {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  left: auto;
+  transform: none;
+  width: min(360px, calc(100vw - 32px));
+  min-width: auto;
+  padding: 18px;
+  border-radius: 12px;
+}
+
+body.overlay-mode #permission-toggle {
+  top: 16px;
+  right: 16px;
+  z-index: 2147483000;
+}
+
+body.overlay-mode #permission-panel {
+  top: 58px;
+  right: -400px;
+  width: min(360px, calc(100vw - 32px));
+  height: auto;
+  max-height: calc(100vh - 74px);
+  border-radius: 12px;
+  padding-bottom: 20px;
+  z-index: 2147482999;
+}
+
+body.overlay-mode #permission-panel.open {
+  right: 16px;
+}
+
 #container {
   display: flex;
   height: 100vh;
@@ -206,10 +252,26 @@ body {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
+.quick-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
 .permission-toggles {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.permission-note {
+  margin-bottom: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #edf2f7;
+  color: #2d3748;
+  font-size: 12px;
 }
 
 .section-title {
@@ -567,5 +629,10 @@ body {
     left: 10px;
     top: 10px;
     padding: 10px;
+  }
+
+  body.overlay-mode #permission-panel {
+    top: 62px;
+    max-height: calc(100vh - 80px);
   }
 }
