@@ -27,6 +27,7 @@ const handle = nextApp.getRequestHandler();
 
 const workspaces = new Map<string, Map<string, ClientState>>();
 const workspaceLocks = new Map<string, Map<string, { lockedBy: string; version: number }>>();
+const workspaceCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 type WorkspaceElementState = {
   elementType: string;
@@ -74,6 +75,11 @@ type WorkspaceSharedState = {
 
 const workspaceSharedState = new Map<string, WorkspaceSharedState>();
 const permissionManager = new PermissionManagerBackend();
+const EMPTY_WORKSPACE_RETENTION_MS_RAW = Number(process.env.COLAB_EMPTY_WORKSPACE_RETENTION_MS);
+const EMPTY_WORKSPACE_RETENTION_MS =
+  Number.isFinite(EMPTY_WORKSPACE_RETENTION_MS_RAW) && EMPTY_WORKSPACE_RETENTION_MS_RAW >= 0
+    ? Math.floor(EMPTY_WORKSPACE_RETENTION_MS_RAW)
+    : 120_000;
 
 type JoinTicketPayload = JWTPayload & {
   workspaceId?: unknown;
@@ -275,6 +281,34 @@ function ensureWorkspaceSharedState(workspaceId: string): WorkspaceSharedState {
   return workspaceSharedState.get(workspaceId) as WorkspaceSharedState;
 }
 
+function clearWorkspaceCleanupTimer(workspaceId: string): void {
+  const existing = workspaceCleanupTimers.get(workspaceId);
+  if (!existing) return;
+  clearTimeout(existing);
+  workspaceCleanupTimers.delete(workspaceId);
+}
+
+function deleteWorkspaceState(workspaceId: string): void {
+  clearWorkspaceCleanupTimer(workspaceId);
+  workspaces.delete(workspaceId);
+  workspaceLocks.delete(workspaceId);
+  workspaceSharedState.delete(workspaceId);
+  permissionManager.deleteWorkspace(workspaceId);
+}
+
+function scheduleWorkspaceCleanup(workspaceId: string): void {
+  clearWorkspaceCleanupTimer(workspaceId);
+  const timer = setTimeout(() => {
+    const workspace = workspaces.get(workspaceId);
+    if (workspace && workspace.size > 0) {
+      workspaceCleanupTimers.delete(workspaceId);
+      return;
+    }
+    deleteWorkspaceState(workspaceId);
+  }, EMPTY_WORKSPACE_RETENTION_MS);
+  workspaceCleanupTimers.set(workspaceId, timer);
+}
+
 function resolveElementIdFromPayload(elementType: string, elementData: unknown, fallbackId?: unknown): string {
   if (typeof fallbackId === 'string' && fallbackId.trim()) {
     return fallbackId.trim();
@@ -379,6 +413,7 @@ nextApp.prepare().then(() => {
             userId = ticketClaims.userId;
             workspaceId = ticketClaims.workspaceId;
             isAuthenticated = true;
+            clearWorkspaceCleanupTimer(workspaceId);
 
             if (!workspaces.has(workspaceId)) {
               workspaces.set(workspaceId, new Map());
@@ -1198,10 +1233,7 @@ nextApp.prepare().then(() => {
           }
 
           if (workspace.size === 0) {
-            workspaces.delete(workspaceId);
-            workspaceLocks.delete(workspaceId);
-            workspaceSharedState.delete(workspaceId);
-            permissionManager.deleteWorkspace(workspaceId);
+            scheduleWorkspaceCleanup(workspaceId);
           } else {
             broadcastToWorkspace(workspaceId, userId, {
               type: 'user_left',
