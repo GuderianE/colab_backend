@@ -825,6 +825,17 @@ nextApp.prepare().then(() => {
           });
         }
 
+        if (type === 'block_focus') {
+          const blockId = typeof data.blockId === 'string' ? data.blockId.trim() : '';
+          const focused = Boolean(data.focused) && Boolean(blockId);
+          broadcastToWorkspace(workspaceId, userId, {
+            type: 'block_focus',
+            userId,
+            blockId,
+            focused
+          });
+        }
+
         if (type === 'sprite_update') {
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId : '';
           const locks = workspaceLocks.get(workspaceId);
