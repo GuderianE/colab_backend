@@ -1,13 +1,20 @@
-import type { CollaborationMessage } from '../../types/collaboration';
+import type { CollaborationMessage, UserRole } from '../../types/collaboration';
 
 export type AuthSuccessPayload = {
   type: 'auth_success';
   userId: string;
   workspaceId: string;
+  role: UserRole;
   permissions: Record<string, boolean>;
+  sharedState?: {
+    elements?: unknown[];
+    spriteMetrics?: unknown[];
+    workspaceSnapshots?: unknown[];
+  };
   users: Array<{
     userId: string;
     username: string;
+    role: UserRole;
     permissions: Record<string, boolean>;
     isOwner: boolean;
   }>;

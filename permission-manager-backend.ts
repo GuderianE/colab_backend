@@ -3,7 +3,6 @@ import { type PermissionKey, type PermissionSet, isPermissionKey } from './types
 type PresetMode = 'presentation' | 'work' | 'test' | 'restricted';
 
 type WorkspacePermissionState = {
-  ownerId: string;
   globalPermissions: PermissionSet;
   userPermissions: Map<string, PermissionSet>;
   isLocked: boolean;
@@ -112,9 +111,8 @@ export default class PermissionManagerBackend {
     };
   }
 
-  initializeWorkspace(workspaceId: string, ownerId: string): void {
+  initializeWorkspace(workspaceId: string): void {
     this.workspacePermissions.set(workspaceId, {
-      ownerId,
       globalPermissions: this.getStudentPermissions(),
       userPermissions: new Map(),
       isLocked: false
@@ -126,10 +124,6 @@ export default class PermissionManagerBackend {
 
     if (!workspace) {
       return this.getStudentPermissions();
-    }
-
-    if (workspace.ownerId === userId) {
-      return this.getOwnerPermissions();
     }
 
     if (workspace.userPermissions.has(userId)) {
@@ -172,6 +166,21 @@ export default class PermissionManagerBackend {
     if (!workspace) return false;
 
     workspace.userPermissions.set(userId, this.getTeacherPermissions());
+    return true;
+  }
+
+  setUserAsAdmin(workspaceId: string, userId: string): boolean {
+    const workspace = this.workspacePermissions.get(workspaceId);
+    if (!workspace) return false;
+
+    workspace.userPermissions.set(userId, this.getOwnerPermissions());
+    return true;
+  }
+
+  clearUserPermissions(workspaceId: string, userId: string): boolean {
+    const workspace = this.workspacePermissions.get(workspaceId);
+    if (!workspace) return false;
+    workspace.userPermissions.delete(userId);
     return true;
   }
 

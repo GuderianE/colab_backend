@@ -33,9 +33,12 @@ export type Coordinates = {
   y: number;
 };
 
+export type UserRole = 'ADMIN' | 'TEACHER' | 'STUDENT' | 'PARENT';
+
 export type WorkspaceUser = {
   userId: string;
   username: string;
+  role: UserRole;
   permissions: PermissionSet;
   isOwner: boolean;
   coords?: Coordinates;

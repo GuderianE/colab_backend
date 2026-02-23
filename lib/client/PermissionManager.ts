@@ -1,12 +1,27 @@
-import type { CollaborationMessage, PermissionSet } from '../../types/collaboration';
+import type { CollaborationMessage, PermissionSet, UserRole } from '../../types/collaboration';
 import type { AuthSuccessPayload } from './WebSocketClient';
 import type WebSocketClient from './WebSocketClient';
 
 export type CollaborationUser = {
   userId: string;
   username: string;
+  role: UserRole;
   isOwner: boolean;
   permissions: Partial<PermissionSet>;
+};
+
+const normalizeUserRole = (value: unknown): UserRole => {
+  if (typeof value !== 'string') return 'STUDENT';
+  const normalized = value.trim().toUpperCase();
+  if (
+    normalized === 'ADMIN' ||
+    normalized === 'TEACHER' ||
+    normalized === 'STUDENT' ||
+    normalized === 'PARENT'
+  ) {
+    return normalized;
+  }
+  return 'STUDENT';
 };
 
 /**
@@ -38,7 +53,21 @@ export default class PermissionManager {
   bindHandlers(): void {
     this.wsClient.addEventListener('onAuthenticated', (data: AuthSuccessPayload) => {
       this.currentPermissions = data.permissions || {};
-      this.users = new Map((data.users || []).map((u) => [u.userId, u]));
+      this.users = new Map(
+        (data.users || []).map((u) => {
+          const role = normalizeUserRole(u.role);
+          return [
+            u.userId,
+            {
+              userId: u.userId,
+              username: typeof u.username === 'string' && u.username.trim() ? u.username : 'User',
+              role,
+              isOwner: typeof u.isOwner === 'boolean' ? u.isOwner : role === 'ADMIN',
+              permissions: u.permissions || {}
+            }
+          ];
+        })
+      );
       this.onPermissionsUpdated();
       this.onUserListUpdated();
     });
@@ -58,8 +87,12 @@ export default class PermissionManager {
       this.users.set(userId, {
         userId,
         username: typeof data.username === 'string' ? data.username : 'User',
-        isOwner: false,
-        permissions: {}
+        role: normalizeUserRole(data.role),
+        isOwner:
+          typeof data.isOwner === 'boolean' ? data.isOwner : normalizeUserRole(data.role) === 'ADMIN',
+        permissions: data.permissions && typeof data.permissions === 'object'
+          ? (data.permissions as Partial<PermissionSet>)
+          : {}
       });
       this.onUserListUpdated();
     });
@@ -75,12 +108,27 @@ export default class PermissionManager {
       const userId = typeof data.userId === 'string' ? data.userId : '';
       if (!userId) return;
 
-      const user = this.users.get(userId) || { userId, username: 'User', isOwner: false, permissions: {} };
+      const user = this.users.get(userId) || {
+        userId,
+        username: 'User',
+        role: 'STUDENT' as UserRole,
+        isOwner: false,
+        permissions: {}
+      };
       if (data.permissions && typeof data.permissions === 'object') {
         user.permissions = data.permissions as Partial<PermissionSet>;
       }
       if (typeof data.username === 'string' && data.username) {
         user.username = data.username;
+      }
+      const hasRole = typeof data.role === 'string' && data.role.trim().length > 0;
+      if (hasRole) {
+        user.role = normalizeUserRole(data.role);
+      }
+      if (typeof data.isOwner === 'boolean') {
+        user.isOwner = data.isOwner;
+      } else if (hasRole) {
+        user.isOwner = user.role === 'ADMIN';
       }
       this.users.set(userId, user);
       this.onUserListUpdated();

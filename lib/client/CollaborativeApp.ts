@@ -168,7 +168,7 @@ export default class CollaborativeApp {
     console.log('Update permission UI:', permissions);
   }
 
-  updateUserListUI(users: Array<{ userId: string; username: string; isOwner: boolean }>): void {
+  updateUserListUI(users: Array<{ userId: string; username: string; role: string; isOwner: boolean }>): void {
     console.log('Update user list:', users);
   }
 

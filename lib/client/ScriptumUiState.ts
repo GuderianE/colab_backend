@@ -7,6 +7,7 @@ export type ScriptumPresenceCircle = {
   initials: string;
   isSelf: boolean;
   isOwner: boolean;
+  role: CollaborationUser['role'];
 };
 
 export type ScriptumTopRightState = {
@@ -27,11 +28,17 @@ export function buildScriptumTopRightState(
   currentPermissions: Partial<PermissionSet>,
   users: CollaborationUser[]
 ): ScriptumTopRightState {
+  const rolePriority: Record<CollaborationUser['role'], number> = {
+    ADMIN: 0,
+    TEACHER: 1,
+    STUDENT: 2,
+    PARENT: 3
+  };
   const sortedUsers = users.slice().sort((a, b) => {
     if (a.userId === currentUserId) return -1;
     if (b.userId === currentUserId) return 1;
-    if (a.isOwner && !b.isOwner) return -1;
-    if (!a.isOwner && b.isOwner) return 1;
+    const roleDiff = rolePriority[a.role] - rolePriority[b.role];
+    if (roleDiff !== 0) return roleDiff;
     return a.username.localeCompare(b.username);
   });
 
@@ -43,7 +50,8 @@ export function buildScriptumTopRightState(
       username: user.username,
       initials: toInitials(user.username),
       isSelf: user.userId === currentUserId,
-      isOwner: user.isOwner
+      isOwner: user.role === 'ADMIN',
+      role: user.role
     }))
   };
 }
