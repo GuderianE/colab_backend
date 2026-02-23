@@ -4,7 +4,7 @@ type PresetMode = 'presentation' | 'work' | 'test' | 'restricted';
 
 type WorkspacePermissionState = {
   globalPermissions: PermissionSet;
-  userPermissions: Map<string, PermissionSet>;
+  userPermissions: Map<string, Partial<PermissionSet>>;
   isLocked: boolean;
 };
 
@@ -126,11 +126,15 @@ export default class PermissionManagerBackend {
       return this.getStudentPermissions();
     }
 
-    if (workspace.userPermissions.has(userId)) {
-      return workspace.userPermissions.get(userId);
+    const overrides = workspace.userPermissions.get(userId);
+    if (!overrides) {
+      return { ...workspace.globalPermissions };
     }
 
-    return workspace.globalPermissions;
+    return {
+      ...workspace.globalPermissions,
+      ...overrides,
+    };
   }
 
   updateGlobalPermission(workspaceId: string, permission: unknown, value: unknown): boolean {
@@ -150,14 +154,9 @@ export default class PermissionManagerBackend {
     const workspace = this.workspacePermissions.get(workspaceId);
     if (!workspace || !isPermissionKey(permission) || typeof value !== 'boolean') return false;
 
-    if (!workspace.userPermissions.has(userId)) {
-      workspace.userPermissions.set(userId, { ...workspace.globalPermissions });
-    }
-
-    const userPermissions = workspace.userPermissions.get(userId);
-    if (!userPermissions) return false;
-
+    const userPermissions = workspace.userPermissions.get(userId) ?? {};
     userPermissions[permission] = value;
+    workspace.userPermissions.set(userId, userPermissions);
     return true;
   }
 

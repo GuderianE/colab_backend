@@ -762,6 +762,9 @@ nextApp.prepare().then(() => {
         }
 
         if (type === 'block_move') {
+          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
+            return;
+          }
           const blockId = typeof data.blockId === 'string' ? data.blockId : '';
           const position = data.position;
           const parentId = data.parentId;
