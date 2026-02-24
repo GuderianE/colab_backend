@@ -795,7 +795,7 @@ nextApp.prepare().then(() => {
         }
 
         if (!isAuthenticated || !workspaceId || !userId) {
-          ws.send(JSON.stringify({ type: 'error', message: 'Not authenticated' }));
+          // Ignore pre-auth messages; auth-specific failures are handled in the auth branch.
           return;
         }
 
