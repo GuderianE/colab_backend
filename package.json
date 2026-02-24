@@ -1,7 +1,7 @@
 {
   "name": "colab_backend",
   "version": "1.0.0",
-  "description": "Collaborative Scratch backend and demo app",
+  "description": "Collaborative Scratch backend service",
   "main": "server.ts",
   "scripts": {
     "dev": "NODE_ENV=development tsx server.ts",

@@ -6,12 +6,11 @@ TypeScript Next.js + Node WebSocket backend for multi-user Scratch-like collabor
 
 - Runs a collaborative websocket backend with workspace isolation.
 - Handles auth, presence, cursor sync, element locks, and permission updates.
-- Serves a Next.js demo UI at `/` that exercises the collaboration protocol.
 - Exposes backend status and workspace info over HTTP.
 
 ## Tech Stack
 
-- Next.js (frontend app shell and pages)
+- Next.js (minimal service shell)
 - Express + Node HTTP server (custom Next server)
 - `ws` for real-time websocket messaging
 - Platform-provided user IDs (no server-generated identity fallback)
@@ -28,12 +27,12 @@ Server defaults to port `4000` unless `PORT` is set.
 ## Scripts
 
 - `npm run dev` - Start custom server in development mode
-- `npm run build` - Build Next.js app
+- `npm run build` - Build Next.js service shell
 - `npm start` - Start custom server in production mode
 
 ## Endpoints
 
-- `GET /` - Next.js collaborative demo UI
+- `GET /` - Service info page (no collaboration client)
 - `GET /health` - Health + active workspace count
 - `GET /workspace/:id` - Workspace users and user count
 
@@ -119,8 +118,7 @@ Server defaults to port `4000` unless `PORT` is set.
 ## Project Structure
 
 - `server.ts` - Next custom server + websocket collaboration backend
-- `pages/index.tsx` - Next.js collaboration demo UI
-- `lib/client/` - Client-side collaboration modules
+- `pages/index.tsx` - Minimal service info page
 - `permission-manager-backend.ts` - Backend permission policy and role logic
 
 ## Integration Notes for Your Platform
@@ -130,16 +128,5 @@ Server defaults to port `4000` unless `PORT` is set.
 - Mirror the message types used in `server.ts` (`request_lock`, `block_move`, etc.).
 - Keep Colab headless: UI should live in your Scriptum frontend.
 
-### Scriptum UI Contract
-
-- Show the permissions button only when `canChangePermissions === true`.
-- Show joined users from the live `users` list (`joinedUsersCount = users.length`).
-- Render users as stacked top-right circles using `username` and `userId`.
-- When a user clicks their own circle, call `app.updateMyUsername(nextName)` (or `app.permissions.updateUsername(nextName)`).
-
-For convenience, use `buildScriptumTopRightState` in `lib/client/ScriptumUiState.ts` to derive:
-- `showPermissionsButton`
-- `joinedUsersCount`
-- `circles[]` (id, name, initials, self, owner)
-
-The Next.js page at `/` remains a demo harness only.
+This repository does not ship browser collaboration logic anymore.
+All collaboration UI and permission controls must live in Scriptum/Platform.
