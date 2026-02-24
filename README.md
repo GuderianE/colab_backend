@@ -110,7 +110,7 @@ Server defaults to port `4000` unless `PORT` is set.
 
 - WebSocket auth now validates `token` as a signed JWT join ticket.
 - Required claim set: `sub` (platform user id), `workspaceId`, `aud=colab-backend`, unique `jti`, valid `exp`.
-- Tickets are single-use: replaying the same `jti` is rejected.
+- Tickets are replay-protected across identities: a consumed `jti` is only reusable for the same `sub + workspaceId` pair until `exp` (supports reload/reconnect).
 - Shared signing secret is read from:
 1. `COLAB_JOIN_TOKEN_SECRET`
 2. `CRON_SECRET` (fallback)

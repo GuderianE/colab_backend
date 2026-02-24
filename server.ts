@@ -111,13 +111,39 @@ if (!joinSecretKey) {
   console.error('COLAB_JOIN_TOKEN_SECRET (or CRON_SECRET) is not configured; join tickets will be rejected.');
 }
 
-const consumedTicketIds = new Map<string, number>();
+type ConsumedTicketRecord = {
+  expiresAt: number;
+  userId: string;
+  workspaceId: string;
+};
+
+const consumedTicketIds = new Map<string, ConsumedTicketRecord>();
 
 function pruneConsumedTicketIds(nowSeconds: number): void {
-  consumedTicketIds.forEach((expiresAt, ticketId) => {
-    if (expiresAt <= nowSeconds) {
+  consumedTicketIds.forEach((record, ticketId) => {
+    if (record.expiresAt <= nowSeconds) {
       consumedTicketIds.delete(ticketId);
     }
+  });
+}
+
+function canReuseConsumedTicket(
+  consumed: ConsumedTicketRecord,
+  claims: { userId: string; workspaceId: string }
+): boolean {
+  return consumed.userId === claims.userId && consumed.workspaceId === claims.workspaceId;
+}
+
+function markTicketAsConsumed(claims: {
+  ticketId: string;
+  expiresAt: number;
+  userId: string;
+  workspaceId: string;
+}): void {
+  consumedTicketIds.set(claims.ticketId, {
+    expiresAt: claims.expiresAt,
+    userId: claims.userId,
+    workspaceId: claims.workspaceId
   });
 }
 
@@ -388,7 +414,8 @@ nextApp.prepare().then(() => {
             }
 
             pruneConsumedTicketIds(Math.floor(Date.now() / 1000));
-            if (consumedTicketIds.has(ticketClaims.ticketId)) {
+            const consumedTicket = consumedTicketIds.get(ticketClaims.ticketId);
+            if (consumedTicket && !canReuseConsumedTicket(consumedTicket, ticketClaims)) {
               ws.send(JSON.stringify({ type: 'error', message: 'Join ticket has already been used' }));
               ws.close(4003, 'Replay detected');
               return;
@@ -408,7 +435,7 @@ nextApp.prepare().then(() => {
               return;
             }
 
-            consumedTicketIds.set(ticketClaims.ticketId, ticketClaims.expiresAt);
+            markTicketAsConsumed(ticketClaims);
 
             userId = ticketClaims.userId;
             workspaceId = ticketClaims.workspaceId;
