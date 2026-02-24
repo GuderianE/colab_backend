@@ -295,6 +295,14 @@ function sendEtagConflict(
   );
 }
 
+function hasWorkspaceSnapshotPermission(workspaceId: string, userId: string): boolean {
+  return (
+    permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks') ||
+    permissionManager.hasPermission(workspaceId, userId, 'canAddBlocks') ||
+    permissionManager.hasPermission(workspaceId, userId, 'canDeleteBlocks')
+  );
+}
+
 function ensureWorkspaceSharedState(workspaceId: string): WorkspaceSharedState {
   if (!workspaceSharedState.has(workspaceId)) {
     workspaceSharedState.set(workspaceId, {
@@ -1188,7 +1196,9 @@ nextApp.prepare().then(() => {
             return;
           }
 
-          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
+          // Workspace snapshots carry block create/delete/move/value updates.
+          // Allow them when the user can mutate blocks through any supported block permission.
+          if (!hasWorkspaceSnapshotPermission(workspaceId, userId)) {
             return;
           }
 
