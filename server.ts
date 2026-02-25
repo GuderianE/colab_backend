@@ -67,10 +67,26 @@ type WorkspaceSnapshotState = {
   updatedAt: number;
 };
 
+type WorkspaceBlocklyReplayEvent = {
+  seq: number;
+  eventJson: Record<string, unknown>;
+  userId: string;
+  timestamp: number;
+};
+
+type WorkspaceBlocklyReplayState = {
+  spriteId: string;
+  nextSeq: number;
+  updatedBy: string;
+  updatedAt: number;
+  events: WorkspaceBlocklyReplayEvent[];
+};
+
 type WorkspaceSharedState = {
   elements: Map<string, WorkspaceElementState>;
   spriteMetrics: Map<string, WorkspaceSpriteMetrics>;
   workspaceSnapshots: Map<string, WorkspaceSnapshotState>;
+  blocklyEventLogs: Map<string, WorkspaceBlocklyReplayState>;
 };
 
 const workspaceSharedState = new Map<string, WorkspaceSharedState>();
@@ -303,12 +319,41 @@ function hasWorkspaceSnapshotPermission(workspaceId: string, userId: string): bo
   );
 }
 
+const BLOCKLY_CREATE_EVENT_TYPES = new Set(['create', 'block_create']);
+const BLOCKLY_DELETE_EVENT_TYPES = new Set(['delete', 'block_delete']);
+const BLOCKLY_EDIT_EVENT_TYPES = new Set(['move', 'block_move', 'change', 'block_change']);
+
+function hasBlocklyReplayPermission(
+  workspaceId: string,
+  userId: string,
+  eventJson: Record<string, unknown>
+): boolean {
+  const eventType = typeof eventJson.type === 'string' ? eventJson.type.trim().toLowerCase() : '';
+  if (!eventType) return false;
+
+  if (BLOCKLY_CREATE_EVENT_TYPES.has(eventType)) {
+    return permissionManager.hasPermission(workspaceId, userId, 'canAddBlocks');
+  }
+  if (BLOCKLY_DELETE_EVENT_TYPES.has(eventType)) {
+    return (
+      permissionManager.hasPermission(workspaceId, userId, 'canDeleteBlocks') ||
+      permissionManager.hasPermission(workspaceId, userId, 'canAddBlocks')
+    );
+  }
+  if (BLOCKLY_EDIT_EVENT_TYPES.has(eventType)) {
+    return permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks');
+  }
+
+  return permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks');
+}
+
 function ensureWorkspaceSharedState(workspaceId: string): WorkspaceSharedState {
   if (!workspaceSharedState.has(workspaceId)) {
     workspaceSharedState.set(workspaceId, {
       elements: new Map(),
       spriteMetrics: new Map(),
-      workspaceSnapshots: new Map()
+      workspaceSnapshots: new Map(),
+      blocklyEventLogs: new Map()
     });
   }
 
@@ -374,11 +419,13 @@ function sharedStateToPayload(state: WorkspaceSharedState): {
   elements: WorkspaceElementState[];
   spriteMetrics: WorkspaceSpriteMetrics[];
   workspaceSnapshots: WorkspaceSnapshotState[];
+  blocklyEventLogs: WorkspaceBlocklyReplayState[];
 } {
   return {
     elements: Array.from(state.elements.values()),
     spriteMetrics: Array.from(state.spriteMetrics.values()),
-    workspaceSnapshots: Array.from(state.workspaceSnapshots.values())
+    workspaceSnapshots: Array.from(state.workspaceSnapshots.values()),
+    blocklyEventLogs: Array.from(state.blocklyEventLogs.values())
   };
 }
 
@@ -909,6 +956,77 @@ nextApp.prepare().then(() => {
           });
         }
 
+        if (type === 'block_drag') {
+          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
+            return;
+          }
+          const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
+          const blockId = typeof data.blockId === 'string' ? data.blockId.trim() : '';
+          const isStart = data.isStart === true;
+          if (!spriteId || !blockId) return;
+
+          broadcastToWorkspace(workspaceId, userId, {
+            type: 'block_drag',
+            userId,
+            spriteId,
+            blockId,
+            isStart
+          });
+        }
+
+        if (type === 'blockly_event') {
+          const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
+          const eventJson = isRecord(data.eventJson) ? data.eventJson : null;
+          if (!spriteId || !eventJson) {
+            return;
+          }
+          if (!hasBlocklyReplayPermission(workspaceId, userId, eventJson)) {
+            return;
+          }
+
+          let serializedEvent = '';
+          try {
+            serializedEvent = JSON.stringify(eventJson);
+          } catch {
+            return;
+          }
+          if (!serializedEvent || serializedEvent.length > 128_000) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Blockly event payload too large' }));
+            return;
+          }
+
+          const state = ensureWorkspaceSharedState(workspaceId);
+          const existingLog = state.blocklyEventLogs.get(spriteId);
+          const nextSeq = existingLog?.nextSeq ?? 1;
+          const replayEvent: WorkspaceBlocklyReplayEvent = {
+            seq: nextSeq,
+            eventJson: { ...eventJson },
+            userId,
+            timestamp: Date.now()
+          };
+          const nextEvents = [...(existingLog?.events ?? []), replayEvent];
+          const MAX_REPLAY_EVENTS_PER_SPRITE = 1500;
+          const trimmedEvents =
+            nextEvents.length > MAX_REPLAY_EVENTS_PER_SPRITE
+              ? nextEvents.slice(nextEvents.length - MAX_REPLAY_EVENTS_PER_SPRITE)
+              : nextEvents;
+          state.blocklyEventLogs.set(spriteId, {
+            spriteId,
+            nextSeq: nextSeq + 1,
+            updatedBy: userId,
+            updatedAt: Date.now(),
+            events: trimmedEvents
+          });
+
+          broadcastToWorkspace(workspaceId, userId, {
+            type: 'blockly_event',
+            userId,
+            spriteId,
+            seq: replayEvent.seq,
+            eventJson: replayEvent.eventJson
+          });
+        }
+
         if (type === 'sprite_update') {
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId : '';
           const locks = workspaceLocks.get(workspaceId);
@@ -1170,6 +1288,7 @@ nextApp.prepare().then(() => {
             if (elementType === 'sprite') {
               state.spriteMetrics.delete(elementId);
               state.workspaceSnapshots.delete(elementId);
+              state.blocklyEventLogs.delete(elementId);
             }
           }
 
