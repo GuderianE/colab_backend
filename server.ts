@@ -319,34 +319,6 @@ function hasWorkspaceSnapshotPermission(workspaceId: string, userId: string): bo
   );
 }
 
-const BLOCKLY_CREATE_EVENT_TYPES = new Set(['create', 'block_create']);
-const BLOCKLY_DELETE_EVENT_TYPES = new Set(['delete', 'block_delete']);
-const BLOCKLY_EDIT_EVENT_TYPES = new Set(['move', 'block_move', 'change', 'block_change']);
-
-function hasBlocklyReplayPermission(
-  workspaceId: string,
-  userId: string,
-  eventJson: Record<string, unknown>
-): boolean {
-  const eventType = typeof eventJson.type === 'string' ? eventJson.type.trim().toLowerCase() : '';
-  if (!eventType) return false;
-
-  if (BLOCKLY_CREATE_EVENT_TYPES.has(eventType)) {
-    return permissionManager.hasPermission(workspaceId, userId, 'canAddBlocks');
-  }
-  if (BLOCKLY_DELETE_EVENT_TYPES.has(eventType)) {
-    return (
-      permissionManager.hasPermission(workspaceId, userId, 'canDeleteBlocks') ||
-      permissionManager.hasPermission(workspaceId, userId, 'canAddBlocks')
-    );
-  }
-  if (BLOCKLY_EDIT_EVENT_TYPES.has(eventType)) {
-    return permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks');
-  }
-
-  return permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks');
-}
-
 function ensureWorkspaceSharedState(workspaceId: string): WorkspaceSharedState {
   if (!workspaceSharedState.has(workspaceId)) {
     workspaceSharedState.set(workspaceId, {
@@ -1014,25 +986,9 @@ nextApp.prepare().then(() => {
             );
             return;
           }
-          if (!hasBlocklyReplayPermission(workspaceId, userId, eventJson)) {
-            const eventType = typeof eventJson.type === 'string' ? eventJson.type : '';
-            console.info('[CollabTrace][backend] blockly_event denied by permissions', {
-              workspaceId,
-              userId,
-              spriteId,
-              eventType
-            });
-            ws.send(
-              JSON.stringify({
-                type: 'blockly_event_denied',
-                reason: 'permission',
-                spriteId,
-                eventType,
-                userId
-              })
-            );
-            return;
-          }
+          // Keep server-side gating at authentication/workspace membership boundaries.
+          // Do not permission-gate replay transport by event type; local editing permissions
+          // are enforced in the client UI layer and replay must remain deliverable.
 
           let serializedEvent = '';
           try {
