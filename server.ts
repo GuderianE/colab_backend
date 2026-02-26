@@ -1373,6 +1373,9 @@ nextApp.prepare().then(() => {
         }
 
         if (type === 'workspace_snapshot') {
+          const eventId = typeof data.eventId === 'string' ? data.eventId.trim() : '';
+          const eventType = typeof data.eventType === 'string' ? data.eventType.trim() : 'workspace_snapshot';
+          const blockId = typeof data.blockId === 'string' ? data.blockId.trim() : '';
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
           const serializedJson = typeof data.serializedJson === 'string' ? data.serializedJson : '';
           if (!spriteId || !serializedJson) {
@@ -1420,10 +1423,27 @@ nextApp.prepare().then(() => {
             updatedAt: Date.now()
           });
 
+          ws.send(
+            JSON.stringify({
+              type: 'workspace_snapshot_accepted',
+              eventId,
+              eventType,
+              blockId,
+              spriteId,
+              seq: version,
+              version,
+              userId
+            })
+          );
+
           broadcastToWorkspace(workspaceId, userId, {
             type: 'workspace_snapshot',
+            eventId,
+            eventType,
+            blockId,
             userId,
             spriteId,
+            seq: version,
             serializedJson,
             version,
             etag,
