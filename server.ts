@@ -930,7 +930,7 @@ nextApp.prepare().then(() => {
 
         if (type === 'block_drag') {
           if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
-            console.info('[CollabTrace][backend] block_drag denied by permissions', {
+            console.info('[BlockTrace][backend] block_drag denied by permissions', {
               workspaceId,
               userId
             });
@@ -948,7 +948,7 @@ nextApp.prepare().then(() => {
           const isStart = data.isStart === true;
           if (!spriteId || !blockId) return;
 
-          console.info('[CollabTrace][backend] block_drag accepted', {
+          console.info('[BlockTrace][backend] block_drag accepted', {
             workspaceId,
             userId,
             spriteId,
@@ -975,7 +975,7 @@ nextApp.prepare().then(() => {
               ? eventJson.eventId.trim()
               : '';
           if (!spriteId || !eventJson) {
-            console.info('[CollabTrace][backend] blockly_event dropped: invalid payload', {
+            console.info('[BlockTrace][backend] blockly_event dropped: invalid payload', {
               workspaceId,
               userId,
               eventId,
@@ -1002,7 +1002,7 @@ nextApp.prepare().then(() => {
           try {
             serializedEvent = JSON.stringify(eventJson);
           } catch {
-            console.info('[CollabTrace][backend] blockly_event dropped: not serializable', {
+            console.info('[BlockTrace][backend] blockly_event dropped: not serializable', {
               workspaceId,
               userId,
               eventId,
@@ -1021,7 +1021,7 @@ nextApp.prepare().then(() => {
             return;
           }
           if (!serializedEvent || serializedEvent.length > 128_000) {
-            console.info('[CollabTrace][backend] blockly_event dropped: payload too large', {
+            console.info('[BlockTrace][backend] blockly_event dropped: payload too large', {
               workspaceId,
               userId,
               eventId,
@@ -1066,7 +1066,7 @@ nextApp.prepare().then(() => {
             events: trimmedEvents
           });
 
-          console.info('[CollabTrace][backend] blockly_event accepted', {
+          console.info('[BlockTrace][backend] blockly_event accepted', {
             workspaceId,
             userId,
             eventId,
