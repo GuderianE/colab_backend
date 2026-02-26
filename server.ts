@@ -59,6 +59,7 @@ type WorkspaceSpriteMetrics = {
 type WorkspaceSnapshotState = {
   spriteId: string;
   serializedJson: string;
+  blocksJson: unknown;
   version: number;
   etag: string;
   firstEditedBy: string;
@@ -1382,7 +1383,12 @@ nextApp.prepare().then(() => {
           const blockIdRaw = typeof data.blockId === 'string' ? data.blockId.trim() : '';
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
           const serializedJson = typeof data.serializedJson === 'string' ? data.serializedJson : '';
-          if (!spriteId || !serializedJson) {
+          const blocksJsonRaw = data.blocksJson;
+          const blocksJson =
+            Array.isArray(blocksJsonRaw) || isRecord(blocksJsonRaw)
+              ? blocksJsonRaw
+              : null;
+          if (!spriteId || !serializedJson || !blocksJson) {
             return;
           }
 
@@ -1432,6 +1438,7 @@ nextApp.prepare().then(() => {
           state.workspaceSnapshots.set(spriteId, {
             spriteId,
             serializedJson,
+            blocksJson,
             version,
             etag,
             firstEditedBy,
@@ -1461,6 +1468,7 @@ nextApp.prepare().then(() => {
             userId,
             spriteId,
             seq: version,
+            blocksJson,
             serializedJson,
             version,
             etag,
