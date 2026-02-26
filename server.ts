@@ -1373,14 +1373,27 @@ nextApp.prepare().then(() => {
         }
 
         if (type === 'workspace_snapshot') {
-          const eventId = typeof data.eventId === 'string' ? data.eventId.trim() : '';
+          const eventIdRaw = typeof data.eventId === 'string' ? data.eventId.trim() : '';
           const eventType = typeof data.eventType === 'string' ? data.eventType.trim() : 'workspace_snapshot';
-          const blockId = typeof data.blockId === 'string' ? data.blockId.trim() : '';
+          const clientSeq = typeof data.seq === 'number' && Number.isFinite(data.seq) ? data.seq : null;
+          const blockIdRaw = typeof data.blockId === 'string' ? data.blockId.trim() : '';
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
           const serializedJson = typeof data.serializedJson === 'string' ? data.serializedJson : '';
           if (!spriteId || !serializedJson) {
             return;
           }
+
+          if (!eventIdRaw || eventType !== 'workspace_snapshot' || clientSeq === null) {
+            ws.send(
+              JSON.stringify({
+                type: 'error',
+                message: 'Invalid workspace snapshot metadata',
+              })
+            );
+            return;
+          }
+
+          const blockId = blockIdRaw;
 
           if (serializedJson.length > 2_000_000) {
             ws.send(JSON.stringify({ type: 'error', message: 'Workspace snapshot too large' }));
@@ -1409,6 +1422,7 @@ nextApp.prepare().then(() => {
           }
 
           const version = (existingSnapshot?.version ?? 0) + 1;
+          const eventId = eventIdRaw;
           const etag = buildEntityEtag(`workspace-snapshot:${spriteId}`, version);
           const firstEditedBy = existingSnapshot?.firstEditedBy ?? userId;
           const firstEditedAt = existingSnapshot?.firstEditedAt ?? Date.now();
