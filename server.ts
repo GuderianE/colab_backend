@@ -968,10 +968,17 @@ nextApp.prepare().then(() => {
         if (type === 'blockly_event') {
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
           const eventJson = isRecord(data.eventJson) ? data.eventJson : null;
+          const eventId =
+            typeof data.eventId === 'string'
+              ? data.eventId.trim()
+              : eventJson && typeof eventJson.eventId === 'string'
+              ? eventJson.eventId.trim()
+              : '';
           if (!spriteId || !eventJson) {
             console.info('[CollabTrace][backend] blockly_event dropped: invalid payload', {
               workspaceId,
               userId,
+              eventId,
               hasSpriteId: Boolean(spriteId),
               hasEventJson: Boolean(eventJson)
             });
@@ -979,6 +986,7 @@ nextApp.prepare().then(() => {
               JSON.stringify({
                 type: 'blockly_event_denied',
                 reason: 'invalid_payload',
+                eventId,
                 spriteId,
                 eventType: isRecord(data.eventJson) && typeof data.eventJson.type === 'string' ? data.eventJson.type : '',
                 userId
@@ -997,12 +1005,14 @@ nextApp.prepare().then(() => {
             console.info('[CollabTrace][backend] blockly_event dropped: not serializable', {
               workspaceId,
               userId,
+              eventId,
               spriteId
             });
             ws.send(
               JSON.stringify({
                 type: 'blockly_event_denied',
                 reason: 'not_serializable',
+                eventId,
                 spriteId,
                 eventType: typeof eventJson.type === 'string' ? eventJson.type : '',
                 userId
@@ -1014,6 +1024,7 @@ nextApp.prepare().then(() => {
             console.info('[CollabTrace][backend] blockly_event dropped: payload too large', {
               workspaceId,
               userId,
+              eventId,
               spriteId,
               size: serializedEvent.length
             });
@@ -1021,6 +1032,7 @@ nextApp.prepare().then(() => {
               JSON.stringify({
                 type: 'blockly_event_denied',
                 reason: 'payload_too_large',
+                eventId,
                 spriteId,
                 eventType: typeof eventJson.type === 'string' ? eventJson.type : '',
                 size: serializedEvent.length,
@@ -1057,6 +1069,7 @@ nextApp.prepare().then(() => {
           console.info('[CollabTrace][backend] blockly_event accepted', {
             workspaceId,
             userId,
+            eventId,
             spriteId,
             seq: replayEvent.seq,
             eventType: typeof replayEvent.eventJson.type === 'string' ? replayEvent.eventJson.type : '',
@@ -1065,6 +1078,7 @@ nextApp.prepare().then(() => {
           ws.send(
             JSON.stringify({
               type: 'blockly_event_accepted',
+              eventId,
               spriteId,
               seq: replayEvent.seq,
               eventType: typeof replayEvent.eventJson.type === 'string' ? replayEvent.eventJson.type : '',
@@ -1074,6 +1088,7 @@ nextApp.prepare().then(() => {
 
           broadcastToWorkspace(workspaceId, userId, {
             type: 'blockly_event',
+            eventId,
             userId,
             spriteId,
             seq: replayEvent.seq,
