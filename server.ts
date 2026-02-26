@@ -858,6 +858,7 @@ nextApp.prepare().then(() => {
           const position = data.position;
           const parentId = data.parentId;
           const attachedTo = data.attachedTo;
+          const blockJson = isRecord(data.blockJson) ? data.blockJson : null;
           const locks = workspaceLocks.get(workspaceId);
           const lockInfo = locks?.get(blockId);
           if (lockInfo && lockInfo.lockedBy !== userId) return;
@@ -891,7 +892,8 @@ nextApp.prepare().then(() => {
                 id: blockId,
                 position,
                 parentId,
-                attachedTo
+                attachedTo,
+                ...(blockJson ? { blockJson } : {})
               },
               version,
               etag,
@@ -910,6 +912,7 @@ nextApp.prepare().then(() => {
             position,
             parentId,
             attachedTo,
+            ...(blockJson ? { blockJson } : {}),
             etag: blockState?.etag,
             version: blockState?.version,
             firstEditedBy: blockState?.firstEditedBy,
