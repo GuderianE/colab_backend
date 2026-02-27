@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import next from 'next';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -13,7 +14,7 @@ type ClientState = {
   ws: SocketWithCleanupFlag;
   permissions: PermissionSet;
   isOwner: boolean;
-  coords?: Coordinates;
+  coords: Coordinates;
 };
 
 type SocketWithCleanupFlag = WebSocket & {
@@ -21,7 +22,17 @@ type SocketWithCleanupFlag = WebSocket & {
 };
 
 const dev = process.env.NODE_ENV !== 'production';
-const PORT = process.env.PORT || 4000;
+function resolvePort(): number {
+  const rawPort = process.env.PORT?.trim();
+  if (!rawPort) return 4000;
+  const parsedPort = Number(rawPort);
+  if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+    throw new Error(`Invalid PORT value: ${rawPort}`);
+  }
+  return parsedPort;
+}
+
+const PORT = resolvePort();
 const nextApp = next({ dev });
 const handle = nextApp.getRequestHandler();
 
@@ -109,24 +120,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
 };
 
 function resolveJoinSecret(): string {
-  const configured = process.env.COLAB_JOIN_TOKEN_SECRET?.trim();
-  if (configured) return configured;
-
-  const shared = process.env.CRON_SECRET?.trim();
-  if (shared) return shared;
-
-  if (process.env.NODE_ENV !== 'production') {
-    return 'dev-colab-join-secret';
+  const joinSecret = process.env.COLAB_JOIN_TOKEN_SECRET?.trim();
+  if (!joinSecret) {
+    throw new Error('COLAB_JOIN_TOKEN_SECRET is required');
   }
-
-  return '';
+  return joinSecret;
 }
 
 const JOIN_SECRET = resolveJoinSecret();
-const joinSecretKey = JOIN_SECRET ? new TextEncoder().encode(JOIN_SECRET) : null;
-if (!joinSecretKey) {
-  console.error('COLAB_JOIN_TOKEN_SECRET (or CRON_SECRET) is not configured; join tickets will be rejected.');
-}
+const joinSecretKey = new TextEncoder().encode(JOIN_SECRET);
 
 type ConsumedTicketRecord = {
   expiresAt: number;
@@ -172,10 +174,6 @@ async function verifyJoinTicket(token: string): Promise<{
   ticketId: string;
   expiresAt: number;
 } | null> {
-  if (!joinSecretKey) {
-    return null;
-  }
-
   try {
     const { payload } = await jwtVerify(token, joinSecretKey, {
       algorithms: ['HS256'],
@@ -192,17 +190,18 @@ async function verifyJoinTicket(token: string): Promise<{
       return null;
     }
     return { userId, workspaceId, username, role, ticketId, expiresAt };
-  } catch {
+  } catch (error) {
+    console.warn('Join ticket verification failed', error);
     return null;
   }
 }
 
-function broadcastToWorkspace(workspaceId: string, senderId: string | null, message: unknown): void {
+function broadcastToWorkspace(workspaceId: string, senderConnectionId: string | null, message: unknown): void {
   const workspace = workspaces.get(workspaceId);
   if (!workspace) return;
 
-  workspace.forEach((client, userId) => {
-    if (userId !== senderId && client.ws.readyState === WebSocket.OPEN) {
+  workspace.forEach((client, connectionId) => {
+    if (connectionId !== senderConnectionId && client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(JSON.stringify(message));
     }
   });
@@ -212,14 +211,50 @@ function getWorkspaceUsers(workspaceId: string) {
   const workspace = workspaces.get(workspaceId);
   if (!workspace) return [];
 
-  const users: Array<{ userId: string; coords: Coordinates }> = [];
-  workspace.forEach((client, userId) => {
-    users.push({
-      userId,
-      coords: client.coords || { x: 0, y: 0 }
-    });
+  const usersById = new Map<string, { userId: string; coords: Coordinates }>();
+  workspace.forEach((client) => {
+    if (!usersById.has(client.id)) {
+      usersById.set(client.id, {
+        userId: client.id,
+        coords: client.coords
+      });
+    }
   });
-  return users;
+  return Array.from(usersById.values());
+}
+
+function getWorkspaceClientByConnectionId(workspaceId: string, connectionId: string): ClientState | null {
+  const workspace = workspaces.get(workspaceId);
+  if (!workspace) return null;
+  return workspace.get(connectionId) ?? null;
+}
+
+function getWorkspaceClientsByUserId(workspaceId: string, userId: string): ClientState[] {
+  const workspace = workspaces.get(workspaceId);
+  if (!workspace) return [];
+  return Array.from(workspace.values()).filter((client) => client.id === userId);
+}
+
+function listWorkspaceUsers(workspace: Map<string, ClientState>): Array<{
+  userId: string;
+  username: string;
+  role: UserRole;
+  permissions: PermissionSet;
+  isOwner: boolean;
+}> {
+  const usersById = new Map<string, ClientState>();
+  workspace.forEach((client) => {
+    if (!usersById.has(client.id)) {
+      usersById.set(client.id, client);
+    }
+  });
+  return Array.from(usersById.values()).map((u) => ({
+    userId: u.id,
+    username: u.username,
+    role: u.role,
+    permissions: u.permissions,
+    isOwner: u.isOwner
+  }));
 }
 
 function normalizeUserId(value: unknown): string {
@@ -362,29 +397,27 @@ function scheduleWorkspaceCleanup(workspaceId: string): void {
 }
 
 function resolveElementIdFromPayload(elementType: string, elementData: unknown, fallbackId?: unknown): string {
-  if (typeof fallbackId === 'string' && fallbackId.trim()) {
-    return fallbackId.trim();
-  }
+  const explicitId = typeof fallbackId === 'string' ? fallbackId.trim() : '';
+  if (explicitId) return explicitId;
+  if (!isRecord(elementData)) return '';
 
-  if (!isRecord(elementData)) {
-    return '';
-  }
-
-  const candidateKeys = ['id', 'elementId', 'spriteId', 'blockId', 'variableId'];
+  const candidateKeysByType: Record<string, string[]> = {
+    block: ['blockId', 'id'],
+    sprite: ['spriteId', 'id'],
+    variable: ['variableId', 'id'],
+    list: ['listId', 'id']
+  };
+  const candidateKeys = candidateKeysByType[elementType] ?? ['id'];
   for (const key of candidateKeys) {
-    const candidate = elementData[key];
-    if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate.trim();
+    const candidateValue = elementData[key];
+    if (typeof candidateValue !== 'string') {
+      continue;
+    }
+    const normalizedCandidate = candidateValue.trim();
+    if (normalizedCandidate) {
+      return normalizedCandidate;
     }
   }
-
-  if (elementType === 'sprite') {
-    const name = elementData.name;
-    if (typeof name === 'string' && name.trim()) {
-      return name.trim();
-    }
-  }
-
   return '';
 }
 
@@ -409,6 +442,7 @@ nextApp.prepare().then(() => {
 
   wss.on('connection', (incomingWs) => {
     const ws = incomingWs as SocketWithCleanupFlag;
+    const clientConnectionId = randomUUID();
     let userId: string | null = null;
     let workspaceId: string | null = null;
     let isAuthenticated = false;
@@ -478,20 +512,11 @@ nextApp.prepare().then(() => {
             ensureWorkspaceSharedState(workspaceId);
 
             const workspaceUsers = workspaces.get(workspaceId) as Map<string, ClientState>;
-            const existingUser = workspaceUsers.get(userId);
-            const isReplacement = !!existingUser;
-
-            if (existingUser && existingUser.ws !== ws) {
-              existingUser.ws.__skipCleanup = true;
-              try {
-                existingUser.ws.close(4001, 'Reconnected with same userId');
-              } catch (error) {
-                console.warn('Failed to close replaced socket', error);
-              }
-            }
+            const existingUserSessions = getWorkspaceClientsByUserId(workspaceId, userId);
+            const isReplacement = existingUserSessions.length > 0;
 
             const usernameFromClient = typeof data.username === 'string' ? data.username.trim().slice(0, 64) : '';
-            const username = ticketClaims.username || usernameFromClient || 'User';
+            const username = ticketClaims.username || usernameFromClient || userId;
             const role = ticketClaims.role;
             if (role === 'ADMIN') {
               permissionManager.setUserAsAdmin(workspaceId, userId);
@@ -508,10 +533,11 @@ nextApp.prepare().then(() => {
               role,
               ws,
               permissions: permissionManager.getUserPermissions(workspaceId, userId),
-              isOwner
+              isOwner,
+              coords: { x: 0, y: 0 }
             };
 
-            workspaceUsers.set(userId, user);
+            workspaceUsers.set(clientConnectionId, user);
 
             console.log(`User ${userId} joined workspace ${workspaceId}`);
 
@@ -524,18 +550,12 @@ nextApp.prepare().then(() => {
                 role: user.role,
                 isOwner,
                 sharedState: sharedStateToPayload(ensureWorkspaceSharedState(workspaceId)),
-                users: Array.from(workspaceUsers.values()).map((u) => ({
-                  userId: u.id,
-                  username: u.username,
-                  role: u.role,
-                  permissions: u.permissions,
-                  isOwner: u.isOwner
-                }))
+                users: listWorkspaceUsers(workspaceUsers)
               })
             );
 
             if (isReplacement) {
-              broadcastToWorkspace(workspaceId, userId, {
+              broadcastToWorkspace(workspaceId, clientConnectionId, {
                 type: 'user_updated',
                 userId,
                 permissions: user.permissions,
@@ -544,7 +564,7 @@ nextApp.prepare().then(() => {
                 isOwner: user.isOwner
               });
             } else {
-              broadcastToWorkspace(workspaceId, userId, {
+              broadcastToWorkspace(workspaceId, clientConnectionId, {
                 type: 'user_joined',
                 userId,
                 username: user.username,
@@ -572,8 +592,7 @@ nextApp.prepare().then(() => {
           case 'request_teacher_role': {
             if (!isAuthenticated || !workspaceId || !userId) return;
 
-            const wsUsers = workspaces.get(workspaceId);
-            const currentClient = wsUsers?.get(userId);
+            const currentClient = getWorkspaceClientByConnectionId(workspaceId, clientConnectionId);
             if (!currentClient) return;
             if (currentClient.role === 'ADMIN') {
               permissionManager.setUserAsAdmin(workspaceId, userId);
@@ -585,8 +604,10 @@ nextApp.prepare().then(() => {
             }
 
             const updatedPerms = permissionManager.getUserPermissions(workspaceId, userId);
-
-            if (wsUsers?.has(userId)) wsUsers.get(userId)!.permissions = updatedPerms;
+            const currentUserClients = getWorkspaceClientsByUserId(workspaceId, userId);
+            currentUserClients.forEach((client) => {
+              client.permissions = updatedPerms;
+            });
 
             ws.send(
               JSON.stringify({
@@ -596,7 +617,7 @@ nextApp.prepare().then(() => {
               })
             );
 
-            broadcastToWorkspace(workspaceId, userId, {
+            broadcastToWorkspace(workspaceId, clientConnectionId, {
               type: 'user_updated',
               userId,
               permissions: updatedPerms,
@@ -615,11 +636,13 @@ nextApp.prepare().then(() => {
               return;
             }
 
-            const wsUsers = workspaces.get(workspaceId);
-            const client = wsUsers?.get(userId);
-            if (!client) return;
+            const currentClient = getWorkspaceClientByConnectionId(workspaceId, clientConnectionId);
+            if (!currentClient) return;
 
-            client.username = nextUsername;
+            const currentUserClients = getWorkspaceClientsByUserId(workspaceId, userId);
+            currentUserClients.forEach((client) => {
+              client.username = nextUsername;
+            });
 
             ws.send(
               JSON.stringify({
@@ -629,12 +652,12 @@ nextApp.prepare().then(() => {
               })
             );
 
-            broadcastToWorkspace(workspaceId, userId, {
+            broadcastToWorkspace(workspaceId, clientConnectionId, {
               type: 'user_updated',
               userId,
               username: nextUsername,
-              role: client.role,
-              isOwner: client.isOwner
+              role: currentClient.role,
+              isOwner: currentClient.isOwner
             });
             break;
           }
@@ -689,23 +712,26 @@ nextApp.prepare().then(() => {
 
             permissionManager.updateUserPermission(workspaceId, targetUserId, data.permission, data.value);
 
-            const wsUsers = workspaces.get(workspaceId);
-            const targetClient = wsUsers?.get(targetUserId);
-            if (targetClient) {
+            const targetClients = getWorkspaceClientsByUserId(workspaceId, targetUserId);
+            if (targetClients.length > 0) {
               const p = permissionManager.getUserPermissions(workspaceId, targetUserId);
-              targetClient.permissions = p;
-              if (targetClient.ws.readyState === WebSocket.OPEN) {
-                targetClient.ws.send(
-                  JSON.stringify({ type: 'permissions_updated', permissions: p, source: 'user_update' })
-                );
-              }
+              targetClients.forEach((targetClient) => {
+                targetClient.permissions = p;
+                if (targetClient.ws.readyState === WebSocket.OPEN) {
+                  targetClient.ws.send(
+                    JSON.stringify({ type: 'permissions_updated', permissions: p, source: 'user_update' })
+                  );
+                }
+              });
+
+              const representativeTarget = targetClients[0];
 
               broadcastToWorkspace(workspaceId, null, {
                 type: 'user_updated',
                 userId: targetUserId,
                 permissions: p,
-                role: targetClient.role,
-                isOwner: targetClient.isOwner
+                role: representativeTarget.role,
+                isOwner: representativeTarget.isOwner
               });
             }
             break;
@@ -772,11 +798,11 @@ nextApp.prepare().then(() => {
               return;
             }
 
-            const version = (existing?.version || 0) + 1;
+            const version = (existing?.version ?? 0) + 1;
             locks.set(elementId, { lockedBy: userId, version });
 
             ws.send(JSON.stringify({ type: 'lock_granted', elementId, version }));
-            broadcastToWorkspace(workspaceId, userId, {
+            broadcastToWorkspace(workspaceId, clientConnectionId, {
               type: 'element_locked',
               elementId,
               lockedBy: userId,
@@ -802,7 +828,7 @@ nextApp.prepare().then(() => {
 
             if (existing && existing.lockedBy === userId) {
               locks.delete(elementId);
-              broadcastToWorkspace(workspaceId, userId, {
+              broadcastToWorkspace(workspaceId, clientConnectionId, {
                 type: 'element_unlocked',
                 elementId,
                 finalPosition
@@ -823,16 +849,47 @@ nextApp.prepare().then(() => {
           const coords = isRecord(data.coords) ? data.coords : null;
           const x = Number(coords?.x ?? data.x ?? 0);
           const y = Number(coords?.y ?? data.y ?? 0);
+          let spriteIdRaw = '';
+          if (typeof data.spriteId === 'string') {
+            spriteIdRaw = data.spriteId;
+          } else if (coords && typeof coords.spriteId === 'string') {
+            spriteIdRaw = coords.spriteId;
+          }
+          const spriteId = spriteIdRaw.trim();
 
           const workspace = workspaces.get(workspaceId);
-          if (workspace?.has(userId)) {
-            workspace.get(userId)!.coords = { x, y };
-            broadcastToWorkspace(workspaceId, userId, {
+          if (workspace?.has(clientConnectionId)) {
+            workspace.get(clientConnectionId)!.coords = { x, y };
+            broadcastToWorkspace(workspaceId, clientConnectionId, {
               type: 'coords_update',
               userId,
+              spriteId,
               coords: { x, y }
             });
           }
+        }
+
+        if (type === 'active_sprite') {
+          const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
+          if (!spriteId) {
+            return;
+          }
+          const workspace = workspaces.get(workspaceId);
+          const currentClient = workspace?.get(clientConnectionId);
+          if (!workspace || !currentClient) {
+            return;
+          }
+
+          const x = Number(currentClient.coords?.x ?? 0);
+          const y = Number(currentClient.coords?.y ?? 0);
+          currentClient.coords = { x, y };
+
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
+            type: 'coords_update',
+            userId,
+            spriteId,
+            coords: { x, y }
+          });
         }
 
         if (type === 'element_drag') {
@@ -841,7 +898,7 @@ nextApp.prepare().then(() => {
           const position = isRecord(data.position) ? data.position : null;
           const isDragging = Boolean(data.isDragging);
 
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'element_drag',
             userId,
             elementId,
@@ -855,6 +912,7 @@ nextApp.prepare().then(() => {
           if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
             return;
           }
+          const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
           const blockId = typeof data.blockId === 'string' ? data.blockId : '';
           const position = data.position;
           const parentId = data.parentId;
@@ -903,12 +961,13 @@ nextApp.prepare().then(() => {
               updatedBy: userId,
               updatedAt: Date.now()
             });
-            blockState = state.elements.get(elementKey) || null;
+            blockState = state.elements.get(elementKey) ?? null;
           }
 
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'block_move',
             userId,
+            ...(spriteId ? { spriteId } : {}),
             blockId,
             position,
             parentId,
@@ -924,7 +983,7 @@ nextApp.prepare().then(() => {
         if (type === 'block_focus') {
           const blockId = typeof data.blockId === 'string' ? data.blockId.trim() : '';
           const focused = Boolean(data.focused) && Boolean(blockId);
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'block_focus',
             userId,
             blockId,
@@ -960,7 +1019,7 @@ nextApp.prepare().then(() => {
             isStart
           });
 
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'block_drag',
             userId,
             spriteId,
@@ -1090,7 +1149,7 @@ nextApp.prepare().then(() => {
             })
           );
 
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'blockly_event',
             eventId,
             userId,
@@ -1203,7 +1262,7 @@ nextApp.prepare().then(() => {
             }
           }
 
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'sprite_update',
             userId,
             spriteId,
@@ -1226,7 +1285,7 @@ nextApp.prepare().then(() => {
         }
 
         if (type === 'stack_move') {
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'stack_move',
             userId,
             stackId: data.stackId,
@@ -1236,7 +1295,7 @@ nextApp.prepare().then(() => {
         }
 
         if (type === 'action') {
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'action',
             userId,
             action: data.action
@@ -1280,7 +1339,7 @@ nextApp.prepare().then(() => {
               updatedBy: userId,
               updatedAt: Date.now()
             });
-            elementState = state.elements.get(elementKey) || null;
+            elementState = state.elements.get(elementKey) ?? null;
 
             if (elementType === 'sprite' && isRecord(data.elementData)) {
               const x = normalizeFiniteNumber(data.elementData.x);
@@ -1307,11 +1366,11 @@ nextApp.prepare().then(() => {
                 updatedBy: userId,
                 updatedAt: Date.now()
               });
-              spriteMetricState = state.spriteMetrics.get(elementId) || null;
+              spriteMetricState = state.spriteMetrics.get(elementId) ?? null;
             }
           }
 
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'element_created',
             elementType,
             elementId,
@@ -1365,7 +1424,7 @@ nextApp.prepare().then(() => {
             }
           }
 
-          broadcastToWorkspace(workspaceId, userId, {
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'element_deleted',
             elementId,
             elementType,
@@ -1460,7 +1519,20 @@ nextApp.prepare().then(() => {
             })
           );
 
-          broadcastToWorkspace(workspaceId, userId, {
+          const lastRealtimeUpdateAt = state.blocklyEventLogs.get(spriteId)?.updatedAt ?? 0;
+          const hasRecentRealtimeUpdates = Date.now() - lastRealtimeUpdateAt < 1200;
+          if (hasRecentRealtimeUpdates) {
+            console.info('[BlockTrace][backend] workspace_snapshot broadcast skipped: realtime lane active', {
+              workspaceId,
+              userId,
+              spriteId,
+              eventId,
+              seq: version,
+            });
+            return;
+          }
+
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'workspace_snapshot',
             eventId,
             eventType,
@@ -1490,22 +1562,28 @@ nextApp.prepare().then(() => {
       if (isAuthenticated && workspaceId && userId) {
         const workspace = workspaces.get(workspaceId);
         if (workspace) {
-          workspace.delete(userId);
+          workspace.delete(clientConnectionId);
 
-          const locks = workspaceLocks.get(workspaceId);
-          if (locks) {
-            Array.from(locks.entries()).forEach(([elementId, info]) => {
-              if (info.lockedBy === userId) {
-                locks.delete(elementId);
-                broadcastToWorkspace(workspaceId, userId, { type: 'element_unlocked', elementId });
-              }
-            });
+          const hasRemainingSessionsForUser = Array.from(workspace.values()).some(
+            (client) => client.id === userId
+          );
+
+          if (!hasRemainingSessionsForUser) {
+            const locks = workspaceLocks.get(workspaceId);
+            if (locks) {
+              Array.from(locks.entries()).forEach(([elementId, info]) => {
+                if (info.lockedBy === userId) {
+                  locks.delete(elementId);
+                  broadcastToWorkspace(workspaceId, null, { type: 'element_unlocked', elementId });
+                }
+              });
+            }
           }
 
           if (workspace.size === 0) {
             scheduleWorkspaceCleanup(workspaceId);
-          } else {
-            broadcastToWorkspace(workspaceId, userId, {
+          } else if (!hasRemainingSessionsForUser) {
+            broadcastToWorkspace(workspaceId, null, {
               type: 'user_left',
               userId
             });
