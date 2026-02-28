@@ -120,15 +120,24 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
 };
 
 function resolveJoinSecret(): string {
-  const joinSecret = process.env.COLAB_JOIN_TOKEN_SECRET?.trim();
-  if (!joinSecret) {
-    throw new Error('COLAB_JOIN_TOKEN_SECRET is required');
+  const configured = process.env.COLAB_JOIN_TOKEN_SECRET?.trim();
+  if (configured) return configured;
+
+  const shared = process.env.CRON_SECRET?.trim();
+  if (shared) return shared;
+
+  if (process.env.NODE_ENV !== 'production') {
+    return 'dev-colab-join-secret';
   }
-  return joinSecret;
+
+  return '';
 }
 
 const JOIN_SECRET = resolveJoinSecret();
-const joinSecretKey = new TextEncoder().encode(JOIN_SECRET);
+const joinSecretKey = JOIN_SECRET ? new TextEncoder().encode(JOIN_SECRET) : null;
+if (!joinSecretKey) {
+  console.error('COLAB_JOIN_TOKEN_SECRET (or CRON_SECRET) is not configured; join tickets will be rejected.');
+}
 
 type ConsumedTicketRecord = {
   expiresAt: number;
@@ -174,6 +183,10 @@ async function verifyJoinTicket(token: string): Promise<{
   ticketId: string;
   expiresAt: number;
 } | null> {
+  if (!joinSecretKey) {
+    return null;
+  }
+
   try {
     const { payload } = await jwtVerify(token, joinSecretKey, {
       algorithms: ['HS256'],
