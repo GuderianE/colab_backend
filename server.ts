@@ -1532,19 +1532,6 @@ nextApp.prepare().then(() => {
             })
           );
 
-          const lastRealtimeUpdateAt = state.blocklyEventLogs.get(spriteId)?.updatedAt ?? 0;
-          const hasRecentRealtimeUpdates = Date.now() - lastRealtimeUpdateAt < 1200;
-          if (hasRecentRealtimeUpdates) {
-            console.info('[BlockTrace][backend] workspace_snapshot broadcast skipped: realtime lane active', {
-              workspaceId,
-              userId,
-              spriteId,
-              eventId,
-              seq: version,
-            });
-            return;
-          }
-
           broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'workspace_snapshot',
             eventId,
