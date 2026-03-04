@@ -13,6 +13,7 @@ export const PERMISSION_KEYS = [
   'canStopCode',
   'canChat',
   'canDraw',
+  'canAccessLevelEditor',
   'canUploadAssets',
   'canEditCostumes',
   'canEditSounds',
