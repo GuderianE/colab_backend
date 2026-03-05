@@ -1185,6 +1185,12 @@ nextApp.prepare().then(() => {
           const visible = typeof data.visible === 'boolean' ? data.visible : undefined;
           const direction = normalizeFiniteNumber(data.direction);
           const name = typeof data.name === 'string' ? data.name : undefined;
+          const hasCompositeId = Object.prototype.hasOwnProperty.call(data, 'compositeId');
+          const compositeId =
+            hasCompositeId && typeof data.compositeId === 'string' ? data.compositeId.trim() : '';
+          const hasCompositeName = Object.prototype.hasOwnProperty.call(data, 'compositeName');
+          const compositeName =
+            hasCompositeName && typeof data.compositeName === 'string' ? data.compositeName.trim() : '';
           const rotationStyle = typeof data.rotationStyle === 'string' ? data.rotationStyle : undefined;
           const currentCostume = normalizeFiniteNumber(data.currentCostume);
           const volume = normalizeFiniteNumber(data.volume);
@@ -1257,6 +1263,20 @@ nextApp.prepare().then(() => {
               if (visible !== undefined) nextSpriteData.visible = visible;
               if (direction !== null) nextSpriteData.direction = direction;
               if (name !== undefined) nextSpriteData.name = name;
+              if (hasCompositeId) {
+                if (compositeId) {
+                  nextSpriteData.compositeId = compositeId;
+                } else {
+                  delete nextSpriteData.compositeId;
+                }
+              }
+              if (hasCompositeName) {
+                if (compositeName) {
+                  nextSpriteData.compositeName = compositeName;
+                } else {
+                  delete nextSpriteData.compositeName;
+                }
+              }
               if (rotationStyle !== undefined) nextSpriteData.rotationStyle = rotationStyle;
               if (currentCostume !== null) nextSpriteData.currentCostume = currentCostume;
               if (volume !== null) nextSpriteData.volume = volume;
@@ -1286,6 +1306,8 @@ nextApp.prepare().then(() => {
             visible,
             direction: direction ?? data.direction,
             name,
+            compositeId: hasCompositeId ? (compositeId || null) : undefined,
+            compositeName: hasCompositeName ? (compositeName || null) : undefined,
             rotationStyle,
             currentCostume: currentCostume ?? data.currentCostume,
             volume: volume ?? data.volume,
