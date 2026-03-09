@@ -1006,10 +1006,6 @@ nextApp.prepare().then(() => {
 
         if (type === 'block_drag') {
           if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
-            console.info('[BlockTrace][backend] block_drag denied by permissions', {
-              workspaceId,
-              userId
-            });
             ws.send(
               JSON.stringify({
                 type: 'block_drag_denied',
@@ -1023,14 +1019,6 @@ nextApp.prepare().then(() => {
           const blockId = typeof data.blockId === 'string' ? data.blockId.trim() : '';
           const isStart = data.isStart === true;
           if (!spriteId || !blockId) return;
-
-          console.info('[BlockTrace][backend] block_drag accepted', {
-            workspaceId,
-            userId,
-            spriteId,
-            blockId,
-            isStart
-          });
 
           broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'block_drag',
@@ -1051,13 +1039,6 @@ nextApp.prepare().then(() => {
               ? eventJson.eventId.trim()
               : '';
           if (!spriteId || !eventJson) {
-            console.info('[BlockTrace][backend] blockly_event dropped: invalid payload', {
-              workspaceId,
-              userId,
-              eventId,
-              hasSpriteId: Boolean(spriteId),
-              hasEventJson: Boolean(eventJson)
-            });
             ws.send(
               JSON.stringify({
                 type: 'blockly_event_denied',
@@ -1078,12 +1059,6 @@ nextApp.prepare().then(() => {
           try {
             serializedEvent = JSON.stringify(eventJson);
           } catch {
-            console.info('[BlockTrace][backend] blockly_event dropped: not serializable', {
-              workspaceId,
-              userId,
-              eventId,
-              spriteId
-            });
             ws.send(
               JSON.stringify({
                 type: 'blockly_event_denied',
@@ -1097,13 +1072,6 @@ nextApp.prepare().then(() => {
             return;
           }
           if (!serializedEvent || serializedEvent.length > 128_000) {
-            console.info('[BlockTrace][backend] blockly_event dropped: payload too large', {
-              workspaceId,
-              userId,
-              eventId,
-              spriteId,
-              size: serializedEvent.length
-            });
             ws.send(
               JSON.stringify({
                 type: 'blockly_event_denied',
@@ -1142,15 +1110,6 @@ nextApp.prepare().then(() => {
             events: trimmedEvents
           });
 
-          console.info('[BlockTrace][backend] blockly_event accepted', {
-            workspaceId,
-            userId,
-            eventId,
-            spriteId,
-            seq: replayEvent.seq,
-            eventType: typeof replayEvent.eventJson.type === 'string' ? replayEvent.eventJson.type : '',
-            logSize: trimmedEvents.length
-          });
           ws.send(
             JSON.stringify({
               type: 'blockly_event_accepted',
