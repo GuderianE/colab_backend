@@ -79,26 +79,10 @@ type WorkspaceSnapshotState = {
   updatedAt: number;
 };
 
-type WorkspaceBlocklyReplayEvent = {
-  seq: number;
-  eventJson: Record<string, unknown>;
-  userId: string;
-  timestamp: number;
-};
-
-type WorkspaceBlocklyReplayState = {
-  spriteId: string;
-  nextSeq: number;
-  updatedBy: string;
-  updatedAt: number;
-  events: WorkspaceBlocklyReplayEvent[];
-};
-
 type WorkspaceSharedState = {
   elements: Map<string, WorkspaceElementState>;
   spriteMetrics: Map<string, WorkspaceSpriteMetrics>;
   workspaceSnapshots: Map<string, WorkspaceSnapshotState>;
-  blocklyEventLogs: Map<string, WorkspaceBlocklyReplayState>;
 };
 
 const workspaceSharedState = new Map<string, WorkspaceSharedState>();
@@ -373,8 +357,7 @@ function ensureWorkspaceSharedState(workspaceId: string): WorkspaceSharedState {
     workspaceSharedState.set(workspaceId, {
       elements: new Map(),
       spriteMetrics: new Map(),
-      workspaceSnapshots: new Map(),
-      blocklyEventLogs: new Map()
+      workspaceSnapshots: new Map()
     });
   }
 
@@ -438,13 +421,11 @@ function sharedStateToPayload(state: WorkspaceSharedState): {
   elements: WorkspaceElementState[];
   spriteMetrics: WorkspaceSpriteMetrics[];
   workspaceSnapshots: WorkspaceSnapshotState[];
-  blocklyEventLogs: WorkspaceBlocklyReplayState[];
 } {
   return {
     elements: Array.from(state.elements.values()),
     spriteMetrics: Array.from(state.spriteMetrics.values()),
-    workspaceSnapshots: Array.from(state.workspaceSnapshots.values()),
-    blocklyEventLogs: Array.from(state.blocklyEventLogs.values())
+    workspaceSnapshots: Array.from(state.workspaceSnapshots.values())
   };
 }
 
@@ -1029,108 +1010,6 @@ nextApp.prepare().then(() => {
           });
         }
 
-        if (type === 'blockly_event') {
-          const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
-          const eventJson = isRecord(data.eventJson) ? data.eventJson : null;
-          const eventId =
-            typeof data.eventId === 'string'
-              ? data.eventId.trim()
-              : eventJson && typeof eventJson.eventId === 'string'
-              ? eventJson.eventId.trim()
-              : '';
-          if (!spriteId || !eventJson) {
-            ws.send(
-              JSON.stringify({
-                type: 'blockly_event_denied',
-                reason: 'invalid_payload',
-                eventId,
-                spriteId,
-                eventType: isRecord(data.eventJson) && typeof data.eventJson.type === 'string' ? data.eventJson.type : '',
-                userId
-              })
-            );
-            return;
-          }
-          // Keep server-side gating at authentication/workspace membership boundaries.
-          // Do not permission-gate replay transport by event type; local editing permissions
-          // are enforced in the client UI layer and replay must remain deliverable.
-
-          let serializedEvent = '';
-          try {
-            serializedEvent = JSON.stringify(eventJson);
-          } catch {
-            ws.send(
-              JSON.stringify({
-                type: 'blockly_event_denied',
-                reason: 'not_serializable',
-                eventId,
-                spriteId,
-                eventType: typeof eventJson.type === 'string' ? eventJson.type : '',
-                userId
-              })
-            );
-            return;
-          }
-          if (!serializedEvent || serializedEvent.length > 128_000) {
-            ws.send(
-              JSON.stringify({
-                type: 'blockly_event_denied',
-                reason: 'payload_too_large',
-                eventId,
-                spriteId,
-                eventType: typeof eventJson.type === 'string' ? eventJson.type : '',
-                size: serializedEvent.length,
-                userId
-              })
-            );
-            ws.send(JSON.stringify({ type: 'error', message: 'Blockly event payload too large' }));
-            return;
-          }
-
-          const state = ensureWorkspaceSharedState(workspaceId);
-          const existingLog = state.blocklyEventLogs.get(spriteId);
-          const nextSeq = existingLog?.nextSeq ?? 1;
-          const replayEvent: WorkspaceBlocklyReplayEvent = {
-            seq: nextSeq,
-            eventJson: { ...eventJson },
-            userId,
-            timestamp: Date.now()
-          };
-          const nextEvents = [...(existingLog?.events ?? []), replayEvent];
-          const MAX_REPLAY_EVENTS_PER_SPRITE = 1500;
-          const trimmedEvents =
-            nextEvents.length > MAX_REPLAY_EVENTS_PER_SPRITE
-              ? nextEvents.slice(nextEvents.length - MAX_REPLAY_EVENTS_PER_SPRITE)
-              : nextEvents;
-          state.blocklyEventLogs.set(spriteId, {
-            spriteId,
-            nextSeq: nextSeq + 1,
-            updatedBy: userId,
-            updatedAt: Date.now(),
-            events: trimmedEvents
-          });
-
-          ws.send(
-            JSON.stringify({
-              type: 'blockly_event_accepted',
-              eventId,
-              spriteId,
-              seq: replayEvent.seq,
-              eventType: typeof replayEvent.eventJson.type === 'string' ? replayEvent.eventJson.type : '',
-              userId
-            })
-          );
-
-          broadcastToWorkspace(workspaceId, clientConnectionId, {
-            type: 'blockly_event',
-            eventId,
-            userId,
-            spriteId,
-            seq: replayEvent.seq,
-            eventJson: replayEvent.eventJson
-          });
-        }
-
         if (type === 'sprite_update') {
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId : '';
           const locks = workspaceLocks.get(workspaceId);
@@ -1414,7 +1293,6 @@ nextApp.prepare().then(() => {
             if (elementType === 'sprite') {
               state.spriteMetrics.delete(elementId);
               state.workspaceSnapshots.delete(elementId);
-              state.blocklyEventLogs.delete(elementId);
             }
           }
 
