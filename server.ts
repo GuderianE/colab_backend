@@ -344,6 +344,34 @@ function sendEtagConflict(
   );
 }
 
+function sendBlockTransportDenied(
+  ws: WebSocket,
+  params: {
+    type: 'block_move_denied' | 'block_drag_denied';
+    userId: string;
+    reason: 'permission' | 'lock';
+    spriteId?: string;
+    blockId?: string;
+    lockedBy?: string | null;
+  }
+): void {
+  const payload: Record<string, unknown> = {
+    type: params.type,
+    userId: params.userId,
+    reason: params.reason
+  };
+  if (params.spriteId) {
+    payload.spriteId = params.spriteId;
+  }
+  if (params.blockId) {
+    payload.blockId = params.blockId;
+  }
+  if (typeof params.lockedBy === 'string' && params.lockedBy.trim()) {
+    payload.lockedBy = params.lockedBy.trim();
+  }
+  ws.send(JSON.stringify(payload));
+}
+
 function hasWorkspaceSnapshotPermission(workspaceId: string, userId: string): boolean {
   return (
     permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks') ||
@@ -903,18 +931,35 @@ nextApp.prepare().then(() => {
         }
 
         if (type === 'block_move') {
-          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
-            return;
-          }
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
           const blockId = typeof data.blockId === 'string' ? data.blockId : '';
+          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
+            sendBlockTransportDenied(ws, {
+              type: 'block_move_denied',
+              userId,
+              reason: 'permission',
+              spriteId,
+              blockId
+            });
+            return;
+          }
           const position = data.position;
           const parentId = data.parentId;
           const attachedTo = data.attachedTo;
           const blockJson = isRecord(data.blockJson) ? data.blockJson : null;
           const locks = workspaceLocks.get(workspaceId);
           const lockInfo = locks?.get(blockId);
-          if (lockInfo && lockInfo.lockedBy !== userId) return;
+          if (lockInfo && lockInfo.lockedBy !== userId) {
+            sendBlockTransportDenied(ws, {
+              type: 'block_move_denied',
+              userId,
+              reason: 'lock',
+              spriteId,
+              blockId,
+              lockedBy: lockInfo.lockedBy
+            });
+            return;
+          }
           let blockState: WorkspaceElementState | null = null;
 
           if (blockId) {
@@ -986,20 +1031,33 @@ nextApp.prepare().then(() => {
         }
 
         if (type === 'block_drag') {
-          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
-            ws.send(
-              JSON.stringify({
-                type: 'block_drag_denied',
-                reason: 'permission',
-                userId
-              })
-            );
-            return;
-          }
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
           const blockId = typeof data.blockId === 'string' ? data.blockId.trim() : '';
+          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
+            sendBlockTransportDenied(ws, {
+              type: 'block_drag_denied',
+              userId,
+              reason: 'permission',
+              spriteId,
+              blockId
+            });
+            return;
+          }
           const isStart = data.isStart === true;
           if (!spriteId || !blockId) return;
+          const locks = workspaceLocks.get(workspaceId);
+          const lockInfo = locks?.get(blockId);
+          if (lockInfo && lockInfo.lockedBy !== userId) {
+            sendBlockTransportDenied(ws, {
+              type: 'block_drag_denied',
+              userId,
+              reason: 'lock',
+              spriteId,
+              blockId,
+              lockedBy: lockInfo.lockedBy
+            });
+            return;
+          }
 
           broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'block_drag',
