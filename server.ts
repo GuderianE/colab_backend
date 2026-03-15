@@ -79,26 +79,10 @@ type WorkspaceSnapshotState = {
   updatedAt: number;
 };
 
-type WorkspaceBlocklyReplayEvent = {
-  seq: number;
-  eventJson: Record<string, unknown>;
-  userId: string;
-  timestamp: number;
-};
-
-type WorkspaceBlocklyReplayState = {
-  spriteId: string;
-  nextSeq: number;
-  updatedBy: string;
-  updatedAt: number;
-  events: WorkspaceBlocklyReplayEvent[];
-};
-
 type WorkspaceSharedState = {
   elements: Map<string, WorkspaceElementState>;
   spriteMetrics: Map<string, WorkspaceSpriteMetrics>;
   workspaceSnapshots: Map<string, WorkspaceSnapshotState>;
-  blocklyEventLogs: Map<string, WorkspaceBlocklyReplayState>;
 };
 
 const workspaceSharedState = new Map<string, WorkspaceSharedState>();
@@ -360,6 +344,34 @@ function sendEtagConflict(
   );
 }
 
+function sendBlockTransportDenied(
+  ws: WebSocket,
+  params: {
+    type: 'block_move_denied' | 'block_drag_denied';
+    userId: string;
+    reason: 'permission' | 'lock';
+    spriteId?: string;
+    blockId?: string;
+    lockedBy?: string | null;
+  }
+): void {
+  const payload: Record<string, unknown> = {
+    type: params.type,
+    userId: params.userId,
+    reason: params.reason
+  };
+  if (params.spriteId) {
+    payload.spriteId = params.spriteId;
+  }
+  if (params.blockId) {
+    payload.blockId = params.blockId;
+  }
+  if (typeof params.lockedBy === 'string' && params.lockedBy.trim()) {
+    payload.lockedBy = params.lockedBy.trim();
+  }
+  ws.send(JSON.stringify(payload));
+}
+
 function hasWorkspaceSnapshotPermission(workspaceId: string, userId: string): boolean {
   return (
     permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks') ||
@@ -373,8 +385,7 @@ function ensureWorkspaceSharedState(workspaceId: string): WorkspaceSharedState {
     workspaceSharedState.set(workspaceId, {
       elements: new Map(),
       spriteMetrics: new Map(),
-      workspaceSnapshots: new Map(),
-      blocklyEventLogs: new Map()
+      workspaceSnapshots: new Map()
     });
   }
 
@@ -438,13 +449,11 @@ function sharedStateToPayload(state: WorkspaceSharedState): {
   elements: WorkspaceElementState[];
   spriteMetrics: WorkspaceSpriteMetrics[];
   workspaceSnapshots: WorkspaceSnapshotState[];
-  blocklyEventLogs: WorkspaceBlocklyReplayState[];
 } {
   return {
     elements: Array.from(state.elements.values()),
     spriteMetrics: Array.from(state.spriteMetrics.values()),
-    workspaceSnapshots: Array.from(state.workspaceSnapshots.values()),
-    blocklyEventLogs: Array.from(state.blocklyEventLogs.values())
+    workspaceSnapshots: Array.from(state.workspaceSnapshots.values())
   };
 }
 
@@ -922,18 +931,35 @@ nextApp.prepare().then(() => {
         }
 
         if (type === 'block_move') {
-          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
-            return;
-          }
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
           const blockId = typeof data.blockId === 'string' ? data.blockId : '';
+          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
+            sendBlockTransportDenied(ws, {
+              type: 'block_move_denied',
+              userId,
+              reason: 'permission',
+              spriteId,
+              blockId
+            });
+            return;
+          }
           const position = data.position;
           const parentId = data.parentId;
           const attachedTo = data.attachedTo;
           const blockJson = isRecord(data.blockJson) ? data.blockJson : null;
           const locks = workspaceLocks.get(workspaceId);
           const lockInfo = locks?.get(blockId);
-          if (lockInfo && lockInfo.lockedBy !== userId) return;
+          if (lockInfo && lockInfo.lockedBy !== userId) {
+            sendBlockTransportDenied(ws, {
+              type: 'block_move_denied',
+              userId,
+              reason: 'lock',
+              spriteId,
+              blockId,
+              lockedBy: lockInfo.lockedBy
+            });
+            return;
+          }
           let blockState: WorkspaceElementState | null = null;
 
           if (blockId) {
@@ -1005,32 +1031,33 @@ nextApp.prepare().then(() => {
         }
 
         if (type === 'block_drag') {
-          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
-            console.info('[BlockTrace][backend] block_drag denied by permissions', {
-              workspaceId,
-              userId
-            });
-            ws.send(
-              JSON.stringify({
-                type: 'block_drag_denied',
-                reason: 'permission',
-                userId
-              })
-            );
-            return;
-          }
           const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
           const blockId = typeof data.blockId === 'string' ? data.blockId.trim() : '';
+          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
+            sendBlockTransportDenied(ws, {
+              type: 'block_drag_denied',
+              userId,
+              reason: 'permission',
+              spriteId,
+              blockId
+            });
+            return;
+          }
           const isStart = data.isStart === true;
           if (!spriteId || !blockId) return;
-
-          console.info('[BlockTrace][backend] block_drag accepted', {
-            workspaceId,
-            userId,
-            spriteId,
-            blockId,
-            isStart
-          });
+          const locks = workspaceLocks.get(workspaceId);
+          const lockInfo = locks?.get(blockId);
+          if (lockInfo && lockInfo.lockedBy !== userId) {
+            sendBlockTransportDenied(ws, {
+              type: 'block_drag_denied',
+              userId,
+              reason: 'lock',
+              spriteId,
+              blockId,
+              lockedBy: lockInfo.lockedBy
+            });
+            return;
+          }
 
           broadcastToWorkspace(workspaceId, clientConnectionId, {
             type: 'block_drag',
@@ -1038,137 +1065,6 @@ nextApp.prepare().then(() => {
             spriteId,
             blockId,
             isStart
-          });
-        }
-
-        if (type === 'blockly_event') {
-          const spriteId = typeof data.spriteId === 'string' ? data.spriteId.trim() : '';
-          const eventJson = isRecord(data.eventJson) ? data.eventJson : null;
-          const eventId =
-            typeof data.eventId === 'string'
-              ? data.eventId.trim()
-              : eventJson && typeof eventJson.eventId === 'string'
-              ? eventJson.eventId.trim()
-              : '';
-          if (!spriteId || !eventJson) {
-            console.info('[BlockTrace][backend] blockly_event dropped: invalid payload', {
-              workspaceId,
-              userId,
-              eventId,
-              hasSpriteId: Boolean(spriteId),
-              hasEventJson: Boolean(eventJson)
-            });
-            ws.send(
-              JSON.stringify({
-                type: 'blockly_event_denied',
-                reason: 'invalid_payload',
-                eventId,
-                spriteId,
-                eventType: isRecord(data.eventJson) && typeof data.eventJson.type === 'string' ? data.eventJson.type : '',
-                userId
-              })
-            );
-            return;
-          }
-          // Keep server-side gating at authentication/workspace membership boundaries.
-          // Do not permission-gate replay transport by event type; local editing permissions
-          // are enforced in the client UI layer and replay must remain deliverable.
-
-          let serializedEvent = '';
-          try {
-            serializedEvent = JSON.stringify(eventJson);
-          } catch {
-            console.info('[BlockTrace][backend] blockly_event dropped: not serializable', {
-              workspaceId,
-              userId,
-              eventId,
-              spriteId
-            });
-            ws.send(
-              JSON.stringify({
-                type: 'blockly_event_denied',
-                reason: 'not_serializable',
-                eventId,
-                spriteId,
-                eventType: typeof eventJson.type === 'string' ? eventJson.type : '',
-                userId
-              })
-            );
-            return;
-          }
-          if (!serializedEvent || serializedEvent.length > 128_000) {
-            console.info('[BlockTrace][backend] blockly_event dropped: payload too large', {
-              workspaceId,
-              userId,
-              eventId,
-              spriteId,
-              size: serializedEvent.length
-            });
-            ws.send(
-              JSON.stringify({
-                type: 'blockly_event_denied',
-                reason: 'payload_too_large',
-                eventId,
-                spriteId,
-                eventType: typeof eventJson.type === 'string' ? eventJson.type : '',
-                size: serializedEvent.length,
-                userId
-              })
-            );
-            ws.send(JSON.stringify({ type: 'error', message: 'Blockly event payload too large' }));
-            return;
-          }
-
-          const state = ensureWorkspaceSharedState(workspaceId);
-          const existingLog = state.blocklyEventLogs.get(spriteId);
-          const nextSeq = existingLog?.nextSeq ?? 1;
-          const replayEvent: WorkspaceBlocklyReplayEvent = {
-            seq: nextSeq,
-            eventJson: { ...eventJson },
-            userId,
-            timestamp: Date.now()
-          };
-          const nextEvents = [...(existingLog?.events ?? []), replayEvent];
-          const MAX_REPLAY_EVENTS_PER_SPRITE = 1500;
-          const trimmedEvents =
-            nextEvents.length > MAX_REPLAY_EVENTS_PER_SPRITE
-              ? nextEvents.slice(nextEvents.length - MAX_REPLAY_EVENTS_PER_SPRITE)
-              : nextEvents;
-          state.blocklyEventLogs.set(spriteId, {
-            spriteId,
-            nextSeq: nextSeq + 1,
-            updatedBy: userId,
-            updatedAt: Date.now(),
-            events: trimmedEvents
-          });
-
-          console.info('[BlockTrace][backend] blockly_event accepted', {
-            workspaceId,
-            userId,
-            eventId,
-            spriteId,
-            seq: replayEvent.seq,
-            eventType: typeof replayEvent.eventJson.type === 'string' ? replayEvent.eventJson.type : '',
-            logSize: trimmedEvents.length
-          });
-          ws.send(
-            JSON.stringify({
-              type: 'blockly_event_accepted',
-              eventId,
-              spriteId,
-              seq: replayEvent.seq,
-              eventType: typeof replayEvent.eventJson.type === 'string' ? replayEvent.eventJson.type : '',
-              userId
-            })
-          );
-
-          broadcastToWorkspace(workspaceId, clientConnectionId, {
-            type: 'blockly_event',
-            eventId,
-            userId,
-            spriteId,
-            seq: replayEvent.seq,
-            eventJson: replayEvent.eventJson
           });
         }
 
@@ -1455,7 +1351,6 @@ nextApp.prepare().then(() => {
             if (elementType === 'sprite') {
               state.spriteMetrics.delete(elementId);
               state.workspaceSnapshots.delete(elementId);
-              state.blocklyEventLogs.delete(elementId);
             }
           }
 
