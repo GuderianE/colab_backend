@@ -179,7 +179,7 @@ async function verifyJoinTicket(token: string): Promise<{
     const typed = payload as JoinTicketPayload;
     const userId = normalizeUserId(payload.sub);
     const workspaceId = normalizeWorkspaceId(typed.workspaceId);
-    const username = typeof typed.username === 'string' ? typed.username.trim().slice(0, 64) : '';
+    const username = typeof typed.username === 'string' ? formatDisplayName(typed.username.trim().slice(0, 64)) : '';
     const role = normalizeUserRole(typed.role);
     const ticketId = typeof payload.jti === 'string' ? payload.jti.trim() : '';
     const expiresAt = typeof payload.exp === 'number' ? payload.exp : 0;
@@ -260,6 +260,12 @@ function normalizeUserId(value: unknown): string {
   if (!normalized) return '';
   if (normalized.length > 128) return '';
   return normalized;
+}
+
+function formatDisplayName(fullName: string): string {
+  const parts = fullName.split(/\s+/);
+  if (parts.length < 2) return fullName;
+  return `${parts[0]} ${parts[1][0].toUpperCase()}.`;
 }
 
 function normalizeWorkspaceId(value: unknown): string {
@@ -537,7 +543,7 @@ nextApp.prepare().then(() => {
             const existingUserSessions = getWorkspaceClientsByUserId(workspaceId, userId);
             const isReplacement = existingUserSessions.length > 0;
 
-            const usernameFromClient = typeof data.username === 'string' ? data.username.trim().slice(0, 64) : '';
+            const usernameFromClient = typeof data.username === 'string' ? formatDisplayName(data.username.trim().slice(0, 64)) : '';
             const username = ticketClaims.username || usernameFromClient || userId;
             const role = ticketClaims.role;
             if (role === 'ADMIN') {
@@ -652,7 +658,7 @@ nextApp.prepare().then(() => {
           case 'update_username': {
             if (!isAuthenticated || !workspaceId || !userId) return;
 
-            const nextUsername = typeof data.username === 'string' ? data.username.trim().slice(0, 64) : '';
+            const nextUsername = typeof data.username === 'string' ? formatDisplayName(data.username.trim().slice(0, 64)) : '';
             if (!nextUsername) {
               ws.send(JSON.stringify({ type: 'error', message: 'Username is required' }));
               return;
