@@ -238,6 +238,7 @@ function listWorkspaceUsers(workspace: Map<string, ClientState>): Array<{
   role: UserRole;
   permissions: PermissionSet;
   isOwner: boolean;
+  coords: Coordinates;
 }> {
   const usersById = new Map<string, ClientState>();
   workspace.forEach((client) => {
@@ -250,7 +251,8 @@ function listWorkspaceUsers(workspace: Map<string, ClientState>): Array<{
     username: u.username,
     role: u.role,
     permissions: u.permissions,
-    isOwner: u.isOwner
+    isOwner: u.isOwner,
+    coords: u.coords
   }));
 }
 
