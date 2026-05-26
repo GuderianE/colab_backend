@@ -3,6 +3,7 @@ export const PERMISSION_KEYS = [
   'canEditBlocks',
   'canAddBlocks',
   'canDeleteBlocks',
+  'canRestoreVersions',
   'canEditSprites',
   'canAddSprites',
   'canDeleteSprites',

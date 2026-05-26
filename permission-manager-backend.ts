@@ -1,4 +1,5 @@
 import { type PermissionKey, type PermissionSet, isPermissionKey } from './types/collaboration';
+import type { UserRole } from './types/collaboration';
 
 type PresetMode = 'presentation' | 'work' | 'test' | 'restricted';
 
@@ -25,6 +26,7 @@ export default class PermissionManagerBackend {
       canEditBlocks: false,
       canAddBlocks: false,
       canDeleteBlocks: false,
+      canRestoreVersions: false,
       canEditSprites: false,
       canAddSprites: false,
       canDeleteSprites: false,
@@ -55,6 +57,7 @@ export default class PermissionManagerBackend {
       canEditBlocks: true,
       canAddBlocks: true,
       canDeleteBlocks: true,
+      canRestoreVersions: true,
       canEditSprites: true,
       canAddSprites: true,
       canDeleteSprites: true,
@@ -86,6 +89,7 @@ export default class PermissionManagerBackend {
       canEditBlocks: true,
       canAddBlocks: true,
       canDeleteBlocks: true,
+      canRestoreVersions: true,
       canEditSprites: true,
       canAddSprites: true,
       canDeleteSprites: true,
@@ -233,6 +237,25 @@ export default class PermissionManagerBackend {
   hasPermission(workspaceId: string, userId: string, permission: PermissionKey): boolean {
     const permissions = this.getUserPermissions(workspaceId, userId);
     return !!permissions?.[permission];
+  }
+
+  hasUserOverride(workspaceId: string, userId: string): boolean {
+    const workspace = this.workspacePermissions.get(workspaceId);
+    if (!workspace) return false;
+    return workspace.userPermissions.has(userId);
+  }
+
+  getRolePermissions(role: UserRole): PermissionSet {
+    switch (role) {
+      case 'ADMIN':
+        return this.getOwnerPermissions();
+      case 'TEACHER':
+        return this.getTeacherPermissions();
+      case 'PARENT':
+      case 'STUDENT':
+      default:
+        return this.getStudentPermissions();
+    }
   }
 
   deleteWorkspace(workspaceId: string): void {

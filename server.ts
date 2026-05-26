@@ -232,6 +232,28 @@ function getWorkspaceClientsByUserId(workspaceId: string, userId: string): Clien
   return Array.from(workspace.values()).filter((client) => client.id === userId);
 }
 
+function resolveTicketPermissions(workspaceId: string, userId: string, role: UserRole): PermissionSet {
+  if (!workspaces.has(workspaceId)) {
+    return permissionManager.getRolePermissions(role);
+  }
+
+  if (permissionManager.hasUserOverride(workspaceId, userId)) {
+    return permissionManager.getUserPermissions(workspaceId, userId);
+  }
+
+  if (role === 'ADMIN' || role === 'TEACHER') {
+    return permissionManager.getRolePermissions(role);
+  }
+
+  return permissionManager.getUserPermissions(workspaceId, userId);
+}
+
+function readBearerToken(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const match = value.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() ?? '';
+}
+
 function listWorkspaceUsers(workspace: Map<string, ClientState>): Array<{
   userId: string;
   username: string;
@@ -1544,6 +1566,34 @@ nextApp.prepare().then(() => {
       workspaceId: wsId,
       users: getWorkspaceUsers(wsId),
       userCount: workspace.size
+    });
+  });
+
+  app.get('/workspace/:id/permissions', async (req, res) => {
+    const wsId = normalizeWorkspaceId(req.params.id);
+    if (!wsId) {
+      return res.status(400).json({ error: 'Workspace id is required' });
+    }
+
+    const token = readBearerToken(req.headers.authorization);
+    if (!token) {
+      return res.status(401).json({ error: 'Missing join ticket' });
+    }
+
+    const ticketClaims = await verifyJoinTicket(token);
+    if (!ticketClaims) {
+      return res.status(401).json({ error: 'Invalid or expired join ticket' });
+    }
+
+    if (ticketClaims.workspaceId !== wsId) {
+      return res.status(403).json({ error: 'Workspace mismatch in join ticket' });
+    }
+
+    return res.json({
+      workspaceId: wsId,
+      userId: ticketClaims.userId,
+      role: ticketClaims.role,
+      permissions: resolveTicketPermissions(wsId, ticketClaims.userId, ticketClaims.role)
     });
   });
 

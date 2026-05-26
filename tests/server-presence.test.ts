@@ -278,6 +278,12 @@ function assertUserPresence(
   assert.deepEqual(user.coords, { x: 0, y: 0 });
 }
 
+function assertRestorePermission(message: BrokerMessage, expected: boolean): void {
+  const permissions = message.permissions as Record<string, unknown> | undefined;
+  assert.ok(permissions, `Expected permissions on message ${JSON.stringify(message)}`);
+  assert.equal(permissions.canRestoreVersions, expected);
+}
+
 test('presence broker keeps same-workspace users visible across roles', async (t) => {
   const server = await startServer();
   t.after(async () => {
@@ -568,4 +574,91 @@ test('presence broker keeps same-workspace users visible across roles', async (t
     assert.deepEqual(coords.coords, { x: 42, y: 24 });
     await outsider.expectNoMessage((message) => message.type === 'coords_update' && message.userId === 'admin-1');
   });
+});
+
+test('auth success includes canRestoreVersions for effective role permissions', async (t) => {
+  const server = await startServer();
+  t.after(async () => {
+    await stopServer(server);
+  });
+
+  const workspaceId = 'workspace-restore-permissions-auth';
+  const teacher = await TestClient.connect(server.port);
+  const student = await TestClient.connect(server.port);
+
+  t.after(async () => {
+    await Promise.allSettled([teacher.close(), student.close()]);
+  });
+
+  const teacherAuth = await teacher.auth({
+    sub: 'teacher-restore-1',
+    workspaceId,
+    username: 'Teacher Restore',
+    role: 'TEACHER',
+  });
+  const studentAuth = await student.auth({
+    sub: 'student-restore-1',
+    workspaceId,
+    username: 'Student Restore',
+    role: 'STUDENT',
+  });
+
+  assertRestorePermission(teacherAuth, true);
+  assertRestorePermission(studentAuth, false);
+});
+
+test('permission updates and permission lookup expose canRestoreVersions', async (t) => {
+  const server = await startServer();
+  t.after(async () => {
+    await stopServer(server);
+  });
+
+  const workspaceId = 'workspace-restore-permissions-update';
+  const teacher = await TestClient.connect(server.port);
+  const student = await TestClient.connect(server.port);
+
+  t.after(async () => {
+    await Promise.allSettled([teacher.close(), student.close()]);
+  });
+
+  await teacher.auth({
+    sub: 'teacher-restore-2',
+    workspaceId,
+    username: 'Teacher Restore',
+    role: 'TEACHER',
+  });
+  await student.auth({
+    sub: 'student-restore-2',
+    workspaceId,
+    username: 'Student Restore',
+    role: 'STUDENT',
+  });
+
+  const studentUpdate = student.nextMessage(
+    (message) => message.type === 'permissions_updated' && message.source === 'user_update'
+  );
+  teacher.send({
+    type: 'update_user_permission',
+    targetUserId: 'student-restore-2',
+    permission: 'canRestoreVersions',
+    value: true,
+  });
+
+  const updateMessage = await studentUpdate;
+  assertRestorePermission(updateMessage, true);
+
+  const studentTicket = await createJoinTicket({
+    sub: 'student-restore-2',
+    workspaceId,
+    username: 'Student Restore',
+    role: 'STUDENT',
+  });
+  const response = await fetch(`http://127.0.0.1:${server.port}/workspace/${workspaceId}/permissions`, {
+    headers: {
+      authorization: `Bearer ${studentTicket}`,
+    },
+  });
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as { permissions?: Record<string, unknown> };
+  assert.equal(payload.permissions?.canRestoreVersions, true);
 });
