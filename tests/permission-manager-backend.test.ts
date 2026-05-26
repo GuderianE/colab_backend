@@ -9,6 +9,7 @@ test('returns student defaults for unknown workspace', () => {
   assert.equal(permissions.canView, true);
   assert.equal(permissions.canEditBlocks, false);
   assert.equal(permissions.canAccessLevelEditor, false);
+  assert.equal(permissions.canEditSounds, false);
   assert.equal(permissions.canRestoreVersions, false);
 });
 
@@ -17,9 +18,11 @@ test('global permission update applies to workspace users', () => {
   manager.initializeWorkspace('ws-1');
 
   assert.equal(manager.updateGlobalPermission('ws-1', 'canEditBlocks', true), true);
+  assert.equal(manager.updateGlobalPermission('ws-1', 'canEditSounds', true), true);
   assert.equal(manager.updateGlobalPermission('ws-1', 'canRestoreVersions', true), true);
   const permissions = manager.getUserPermissions('ws-1', 'student-1');
   assert.equal(permissions.canEditBlocks, true);
+  assert.equal(permissions.canEditSounds, true);
   assert.equal(permissions.canRestoreVersions, true);
 });
 
@@ -27,12 +30,15 @@ test('user override permission wins over global permission', () => {
   const manager = new PermissionManagerBackend();
   manager.initializeWorkspace('ws-1');
   manager.updateGlobalPermission('ws-1', 'canEditBlocks', false);
+  manager.updateGlobalPermission('ws-1', 'canEditSounds', false);
   manager.updateGlobalPermission('ws-1', 'canRestoreVersions', false);
   manager.updateUserPermission('ws-1', 'student-1', 'canEditBlocks', true);
+  manager.updateUserPermission('ws-1', 'student-1', 'canEditSounds', true);
   manager.updateUserPermission('ws-1', 'student-1', 'canRestoreVersions', true);
 
   const permissions = manager.getUserPermissions('ws-1', 'student-1');
   assert.equal(permissions.canEditBlocks, true);
+  assert.equal(permissions.canEditSounds, true);
   assert.equal(permissions.canRestoreVersions, true);
 });
 
@@ -47,7 +53,9 @@ test('teacher/admin role assignment grants elevated permissions', () => {
   const admin = manager.getUserPermissions('ws-1', 'admin-1');
 
   assert.equal(teacher.canRestoreVersions, true);
+  assert.equal(teacher.canEditSounds, true);
   assert.equal(admin.canRestoreVersions, true);
+  assert.equal(admin.canEditSounds, true);
   assert.equal(teacher.canChangePermissions, true);
   assert.equal(teacher.canLockWorkspace, false);
   assert.equal(admin.canLockWorkspace, true);
