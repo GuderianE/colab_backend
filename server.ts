@@ -17,8 +17,19 @@ type ClientState = {
   coords: Coordinates;
 };
 
+type SocketConnectionState = {
+  connectionId: string;
+  openedAt: number;
+  userId: string | null;
+  workspaceId: string | null;
+  isAuthenticated: boolean;
+  isAlive: boolean;
+  authTimeoutTimer: ReturnType<typeof setTimeout> | null;
+};
+
 type SocketWithCleanupFlag = WebSocket & {
   __skipCleanup?: boolean;
+  __connectionState?: SocketConnectionState;
 };
 
 const dev = process.env.NODE_ENV !== 'production';
@@ -92,6 +103,18 @@ const EMPTY_WORKSPACE_RETENTION_MS =
   Number.isFinite(EMPTY_WORKSPACE_RETENTION_MS_RAW) && EMPTY_WORKSPACE_RETENTION_MS_RAW >= 0
     ? Math.floor(EMPTY_WORKSPACE_RETENTION_MS_RAW)
     : 120_000;
+const AUTH_TIMEOUT_MS_RAW = Number(process.env.COLAB_AUTH_TIMEOUT_MS);
+const AUTH_TIMEOUT_MS =
+  Number.isFinite(AUTH_TIMEOUT_MS_RAW) && AUTH_TIMEOUT_MS_RAW >= 0
+    ? Math.floor(AUTH_TIMEOUT_MS_RAW)
+    : 15_000;
+const HEARTBEAT_INTERVAL_MS_RAW = Number(process.env.COLAB_HEARTBEAT_INTERVAL_MS);
+const HEARTBEAT_INTERVAL_MS =
+  Number.isFinite(HEARTBEAT_INTERVAL_MS_RAW) && HEARTBEAT_INTERVAL_MS_RAW >= 1
+    ? Math.floor(HEARTBEAT_INTERVAL_MS_RAW)
+    : 30_000;
+
+let nextConnectionOrdinal = 0;
 
 type JoinTicketPayload = JWTPayload & {
   workspaceId?: unknown;
@@ -102,6 +125,80 @@ type JoinTicketPayload = JWTPayload & {
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null;
 };
+
+function createConnectionId(): string {
+  nextConnectionOrdinal += 1;
+  return `conn-${nextConnectionOrdinal.toString(36)}`;
+}
+
+function buildConnectionLogContext(state: SocketConnectionState): Record<string, unknown> {
+  return {
+    connectionId: state.connectionId,
+    authenticated: state.isAuthenticated,
+    userId: state.userId,
+    workspaceId: state.workspaceId,
+    connectionAgeMs: Date.now() - state.openedAt,
+  };
+}
+
+function logSocketEvent(
+  level: 'info' | 'warn' | 'error',
+  event: string,
+  state: SocketConnectionState,
+  extra: Record<string, unknown> = {},
+): void {
+  const payload = {
+    scope: 'colab_ws',
+    event,
+    ...buildConnectionLogContext(state),
+    ...extra,
+  };
+  const rendered = JSON.stringify(payload);
+  if (level === 'warn') {
+    console.warn(rendered);
+    return;
+  }
+  if (level === 'error') {
+    console.error(rendered);
+    return;
+  }
+  console.log(rendered);
+}
+
+function logSocketErrorEvent(
+  event: string,
+  state: SocketConnectionState,
+  error: unknown,
+  extra: Record<string, unknown> = {},
+): void {
+  const normalizedError = error instanceof Error
+    ? {
+        errorName: error.name,
+        errorMessage: error.message,
+      }
+    : {
+        errorName: 'UnknownError',
+        errorMessage: String(error),
+      };
+  logSocketEvent('error', event, state, {
+    ...normalizedError,
+    ...extra,
+  });
+}
+
+function clearSocketAuthTimeout(state: SocketConnectionState): void {
+  if (!state.authTimeoutTimer) {
+    return;
+  }
+
+  clearTimeout(state.authTimeoutTimer);
+  state.authTimeoutTimer = null;
+}
+
+function decodeCloseReason(reason: Buffer): string {
+  const decoded = reason.toString('utf8').trim();
+  return decoded.length > 0 ? decoded : '';
+}
 
 function resolveJoinSecret(): string {
   const configured = process.env.COLAB_JOIN_TOKEN_SECRET?.trim();
@@ -492,17 +589,84 @@ nextApp.prepare().then(() => {
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
 
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((client) => {
+      const ws = client as SocketWithCleanupFlag;
+      const state = ws.__connectionState;
+      if (!state || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      if (!state.isAlive) {
+        logSocketEvent('warn', 'heartbeat_termination', state, {
+          heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+        });
+        ws.terminate();
+        return;
+      }
+
+      state.isAlive = false;
+      try {
+        ws.ping();
+      } catch (error) {
+        logSocketErrorEvent('heartbeat_ping_error', state, error, {
+          heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+        });
+        ws.terminate();
+      }
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeatInterval.unref?.();
+
+  const clearHeartbeatInterval = () => {
+    clearInterval(heartbeatInterval);
+  };
+
+  wss.on('close', clearHeartbeatInterval);
+  server.on('close', clearHeartbeatInterval);
+
   wss.on('connection', (incomingWs) => {
     const ws = incomingWs as SocketWithCleanupFlag;
     const clientConnectionId = randomUUID();
+    const connectionState: SocketConnectionState = {
+      connectionId: createConnectionId(),
+      openedAt: Date.now(),
+      userId: null,
+      workspaceId: null,
+      isAuthenticated: false,
+      isAlive: true,
+      authTimeoutTimer: null,
+    };
+    ws.__connectionState = connectionState;
     let userId: string | null = null;
     let workspaceId: string | null = null;
     let isAuthenticated = false;
 
-    console.log('New WebSocket connection established');
+    logSocketEvent('info', 'connection_opened', connectionState, {
+      authTimeoutMs: AUTH_TIMEOUT_MS,
+      heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+    });
+
+    connectionState.authTimeoutTimer = setTimeout(() => {
+      connectionState.authTimeoutTimer = null;
+      if (connectionState.isAuthenticated || ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      logSocketEvent('warn', 'auth_timeout_termination', connectionState, {
+        authTimeoutMs: AUTH_TIMEOUT_MS,
+      });
+      ws.close(4003, 'Auth timeout');
+    }, AUTH_TIMEOUT_MS);
+    connectionState.authTimeoutTimer.unref?.();
+
+    ws.on('pong', () => {
+      connectionState.isAlive = true;
+    });
 
     ws.on('message', async (message) => {
       try {
+        connectionState.isAlive = true;
         const parsed = JSON.parse(message.toString()) as unknown;
         if (!isRecord(parsed)) {
           ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
@@ -513,8 +677,15 @@ nextApp.prepare().then(() => {
 
         switch (type) {
           case 'auth': {
+            logSocketEvent('info', 'auth_message_received', connectionState, {
+              providedWorkspaceId: normalizeWorkspaceId(data.workspace) || null,
+              providedUserId: normalizeUserId(data.userId) || null,
+            });
             const token = typeof data.token === 'string' ? data.token.trim() : '';
             if (!token) {
+              logSocketEvent('warn', 'auth_failure', connectionState, {
+                reason: 'missing_join_ticket',
+              });
               ws.send(JSON.stringify({ type: 'error', message: 'Missing join ticket' }));
               ws.close(4003, 'Missing join ticket');
               return;
@@ -522,6 +693,9 @@ nextApp.prepare().then(() => {
 
             const ticketClaims = await verifyJoinTicket(token);
             if (!ticketClaims) {
+              logSocketEvent('warn', 'auth_failure', connectionState, {
+                reason: 'invalid_join_ticket',
+              });
               ws.send(JSON.stringify({ type: 'error', message: 'Invalid or expired join ticket' }));
               ws.close(4003, 'Invalid join ticket');
               return;
@@ -530,6 +704,9 @@ nextApp.prepare().then(() => {
             pruneConsumedTicketIds(Math.floor(Date.now() / 1000));
             const consumedTicket = consumedTicketIds.get(ticketClaims.ticketId);
             if (consumedTicket && !canReuseConsumedTicket(consumedTicket, ticketClaims)) {
+              logSocketEvent('warn', 'auth_failure', connectionState, {
+                reason: 'replay_detected',
+              });
               ws.send(JSON.stringify({ type: 'error', message: 'Join ticket has already been used' }));
               ws.close(4003, 'Replay detected');
               return;
@@ -537,6 +714,11 @@ nextApp.prepare().then(() => {
 
             const providedWorkspace = normalizeWorkspaceId(data.workspace);
             if (providedWorkspace && providedWorkspace !== ticketClaims.workspaceId) {
+              logSocketEvent('warn', 'auth_failure', connectionState, {
+                reason: 'workspace_mismatch',
+                providedWorkspaceId: providedWorkspace,
+                ticketWorkspaceId: ticketClaims.workspaceId,
+              });
               ws.send(JSON.stringify({ type: 'error', message: 'Workspace mismatch in join ticket' }));
               ws.close(4003, 'Workspace mismatch');
               return;
@@ -544,6 +726,11 @@ nextApp.prepare().then(() => {
 
             const providedUserId = normalizeUserId(data.userId);
             if (providedUserId && providedUserId !== ticketClaims.userId) {
+              logSocketEvent('warn', 'auth_failure', connectionState, {
+                reason: 'user_mismatch',
+                providedUserId,
+                ticketUserId: ticketClaims.userId,
+              });
               ws.send(JSON.stringify({ type: 'error', message: 'User mismatch in join ticket' }));
               ws.close(4003, 'User mismatch');
               return;
@@ -554,7 +741,15 @@ nextApp.prepare().then(() => {
             userId = ticketClaims.userId;
             workspaceId = ticketClaims.workspaceId;
             isAuthenticated = true;
+            connectionState.userId = userId;
+            connectionState.workspaceId = workspaceId;
+            connectionState.isAuthenticated = true;
+            clearSocketAuthTimeout(connectionState);
             clearWorkspaceCleanupTimer(workspaceId);
+
+            logSocketEvent('info', 'auth_success', connectionState, {
+              role: ticketClaims.role,
+            });
 
             if (!workspaces.has(workspaceId)) {
               workspaces.set(workspaceId, new Map());
@@ -591,7 +786,18 @@ nextApp.prepare().then(() => {
 
             workspaceUsers.set(clientConnectionId, user);
 
-            console.log(`User ${userId} joined workspace ${workspaceId}`);
+            const duplicateSessionCount = getWorkspaceClientsByUserId(workspaceId, userId).length;
+            if (duplicateSessionCount > 1) {
+              logSocketEvent('info', 'duplicate_connection_detected', connectionState, {
+                duplicateSessionCount,
+              });
+            }
+
+            logSocketEvent('info', 'workspace_joined', connectionState, {
+              role,
+              workspaceClientCount: workspaceUsers.size,
+              duplicateSessionCount,
+            });
 
             ws.send(
               JSON.stringify({
@@ -1496,12 +1702,18 @@ nextApp.prepare().then(() => {
           });
         }
       } catch (error) {
-        console.error('Error processing message:', error);
+        logSocketErrorEvent('message_processing_error', connectionState, error);
         ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code, reasonBuffer) => {
+      clearSocketAuthTimeout(connectionState);
+      logSocketEvent('info', 'connection_closed', connectionState, {
+        code,
+        reason: decodeCloseReason(reasonBuffer),
+      });
+
       if (ws.__skipCleanup) {
         return;
       }
@@ -1537,12 +1749,15 @@ nextApp.prepare().then(() => {
           }
         }
 
-        console.log(`User ${userId} left workspace ${workspaceId}`);
+        logSocketEvent('info', 'workspace_left', connectionState, {
+          workspaceClientCount: workspaces.get(workspaceId)?.size ?? 0,
+        });
       }
     });
 
     ws.on('error', (error) => {
-      console.error('WebSocket error:', error);
+      clearSocketAuthTimeout(connectionState);
+      logSocketErrorEvent('connection_error', connectionState, error);
     });
   });
 
