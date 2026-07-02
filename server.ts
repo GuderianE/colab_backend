@@ -294,9 +294,18 @@ function broadcastToWorkspace(workspaceId: string, senderConnectionId: string | 
   const workspace = workspaces.get(workspaceId);
   if (!workspace) return;
 
+  // Serialize ONCE, not per-recipient. Snapshot broadcasts carry multi-MB
+  // blocksJson; re-stringifying inside the loop was O(clients × payload) of
+  // synchronous work on the single event-loop thread, which at class-start
+  // stalled the loop (and delayed new /ws upgrades).
+  const serialized = JSON.stringify(message);
   workspace.forEach((client, connectionId) => {
     if (connectionId !== senderConnectionId && client.ws.readyState === WebSocket.OPEN) {
-      client.ws.send(JSON.stringify(message));
+      try {
+        client.ws.send(serialized);
+      } catch {
+        // A single failing socket must not abort delivery to the rest of the room.
+      }
     }
   });
 }
@@ -1818,4 +1827,10 @@ nextApp.prepare().then(() => {
     console.log(`Server is running on port ${PORT}`);
     console.log('WebSocket server is ready');
   });
+}).catch((error) => {
+  // Previously prepare() had no catch: a failure was a silent unhandled
+  // rejection that left the process half-dead. Fail loudly so the orchestrator
+  // restarts it instead of serving a stuck instance.
+  console.error('Next.js prepare failed', error);
+  process.exit(1);
 });
