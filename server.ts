@@ -114,6 +114,41 @@ const HEARTBEAT_INTERVAL_MS =
     ? Math.floor(HEARTBEAT_INTERVAL_MS_RAW)
     : 30_000;
 
+// Event-loop lag watchdog. This server is single-threaded: every websocket
+// upgrade, message and broadcast runs on one thread. If anything blocks the loop
+// (a large synchronous serialize, a runaway loop, a long GC pause), new
+// connections stall behind it — the browser shows a long "waiting for server
+// response" with no other cause. A timer meant to fire every INTERVAL fires LATE
+// by exactly the block duration, so we log any lateness past the threshold with a
+// timestamp. That turns an intermittent stall into a greppable fact
+// (event:"event_loop_blocked") we can correlate with the log line before it.
+const EVENT_LOOP_MONITOR_INTERVAL_MS = 500;
+const EVENT_LOOP_LAG_WARN_MS_RAW = Number(process.env.COLAB_EVENT_LOOP_LAG_WARN_MS);
+const EVENT_LOOP_LAG_WARN_MS =
+  Number.isFinite(EVENT_LOOP_LAG_WARN_MS_RAW) && EVENT_LOOP_LAG_WARN_MS_RAW >= 1
+    ? Math.floor(EVENT_LOOP_LAG_WARN_MS_RAW)
+    : 1_000;
+
+let lastEventLoopTick = Date.now();
+const eventLoopMonitor = setInterval(() => {
+  const now = Date.now();
+  const blockedMs = now - lastEventLoopTick - EVENT_LOOP_MONITOR_INTERVAL_MS;
+  lastEventLoopTick = now;
+  if (blockedMs >= EVENT_LOOP_LAG_WARN_MS) {
+    console.warn(
+      JSON.stringify({
+        scope: 'colab_ws',
+        event: 'event_loop_blocked',
+        blockedMs,
+        thresholdMs: EVENT_LOOP_LAG_WARN_MS,
+        intervalMs: EVENT_LOOP_MONITOR_INTERVAL_MS,
+        timestamp: new Date(now).toISOString(),
+      }),
+    );
+  }
+}, EVENT_LOOP_MONITOR_INTERVAL_MS);
+eventLoopMonitor.unref?.();
+
 let nextConnectionOrdinal = 0;
 
 type JoinTicketPayload = JWTPayload & {
