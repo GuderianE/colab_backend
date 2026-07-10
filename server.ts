@@ -543,6 +543,12 @@ function sendBlockTransportDenied(
   ws.send(JSON.stringify(payload));
 }
 
+function isEmptyBlocksJson(blocksJson: unknown): boolean {
+  if (Array.isArray(blocksJson)) return blocksJson.length === 0;
+  if (isRecord(blocksJson)) return Object.keys(blocksJson).length === 0;
+  return true;
+}
+
 function hasWorkspaceSnapshotPermission(workspaceId: string, userId: string): boolean {
   return (
     permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks') ||
@@ -1695,6 +1701,24 @@ nextApp.prepare().then(() => {
               currentEtag: existingSnapshot?.etag,
               firstEditedBy: existingSnapshot?.firstEditedBy,
               firstEditedAt: existingSnapshot?.firstEditedAt
+            });
+            return;
+          }
+
+          // Defense against the sprite-wipe data-loss path: a late joiner that never received
+          // a sprite renders it empty, and touching it emits an EMPTY snapshot. Never let an
+          // empty snapshot replace existing non-empty content — that silently destroys the real
+          // blocks for everyone. Normal edits keep content (non-empty), and a brand-new sprite
+          // has no existing snapshot, so only the destructive overwrite is blocked. The sender
+          // gets a conflict so it resyncs the authoritative state.
+          if (isEmptyBlocksJson(blocksJson) && existingSnapshot && !isEmptyBlocksJson(existingSnapshot.blocksJson)) {
+            sendEtagConflict(ws, {
+              entityType: 'workspace_snapshot',
+              entityId: spriteId,
+              ifMatch: submittedIfMatch,
+              currentEtag: existingSnapshot.etag,
+              firstEditedBy: existingSnapshot.firstEditedBy,
+              firstEditedAt: existingSnapshot.firstEditedAt
             });
             return;
           }
