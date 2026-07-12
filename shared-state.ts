@@ -80,6 +80,23 @@ export function deleteWorkspaceSharedState(workspaceId: string): void {
   workspaceSharedState.delete(workspaceId);
 }
 
+// Inverse of sharedStateToPayload: overwrite the workspace's entire shared-state with the
+// given payload. This is a REPLACE, not a merge — any element/metric/snapshot not present in
+// the payload is dropped, so a stale entry can never survive an authoritative snapshot (the
+// property the single-source-of-truth model depends on). Returns the new state.
+export function replaceWorkspaceSharedState(
+  workspaceId: string,
+  payload: WorkspaceSharedStatePayload
+): WorkspaceSharedState {
+  const state: WorkspaceSharedState = {
+    elements: new Map(payload.elements.map((element) => [elementStateKey(element), element])),
+    spriteMetrics: new Map(payload.spriteMetrics.map((metric) => [metric.spriteId, metric])),
+    workspaceSnapshots: new Map(payload.workspaceSnapshots.map((snapshot) => [snapshot.spriteId, snapshot]))
+  };
+  workspaceSharedState.set(workspaceId, state);
+  return state;
+}
+
 export function sharedStateToPayload(state: WorkspaceSharedState): WorkspaceSharedStatePayload {
   return {
     elements: Array.from(state.elements.values()),
