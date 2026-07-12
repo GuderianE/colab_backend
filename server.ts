@@ -98,6 +98,93 @@ type WorkspaceSharedState = {
 
 const workspaceSharedState = new Map<string, WorkspaceSharedState>();
 const permissionManager = new PermissionManagerBackend();
+
+// --- Durable permission persistence -----------------------------------------------------
+// Permissions live in-memory above, but must survive client reloads, empty rooms, and
+// backend restarts. We mirror them to the platform DB (Group.data.collabPermissions) via an
+// internal, secret-authenticated API — loading on cold workspace init and saving (debounced)
+// on every genuine permission edit.
+const PLATFORM_BASE_URL = process.env.PLATFORM_BASE_URL?.trim() ?? '';
+const PLATFORM_INTERNAL_SECRET =
+  process.env.INTERNAL_PROXY_SECRET?.trim() ||
+  process.env.PLATFORM_PROXY_SECRET?.trim() ||
+  process.env.CRON_SECRET?.trim() ||
+  '';
+const permissionPersistenceEnabled = Boolean(PLATFORM_BASE_URL && PLATFORM_INTERNAL_SECRET);
+const permissionSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const workspacePermissionHydration = new Map<string, Promise<void>>();
+
+async function loadPersistedPermissions(workspaceId: string): Promise<unknown | null> {
+  if (!permissionPersistenceEnabled) return null;
+  try {
+    const res = await fetch(
+      `${PLATFORM_BASE_URL}/api/collab/internal/permissions?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { headers: { 'x-internal-proxy-secret': PLATFORM_INTERNAL_SECRET } },
+    );
+    if (!res.ok) return null;
+    const json = (await res.json()) as { permissions?: unknown };
+    return json?.permissions ?? null;
+  } catch (error) {
+    console.warn('[colab] failed to load persisted permissions', {
+      workspaceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+// Load-once-per-cold-workspace: concurrent joiners await the same hydration promise so none
+// proceed with default permissions before the persisted state lands.
+function ensurePermissionsHydrated(workspaceId: string): Promise<void> {
+  const existing = workspacePermissionHydration.get(workspaceId);
+  if (existing) return existing;
+  const hydration = loadPersistedPermissions(workspaceId)
+    .then((persisted) => {
+      if (persisted) {
+        permissionManager.hydrateWorkspace(workspaceId, persisted);
+      }
+    })
+    .catch(() => {
+      /* already logged in loadPersistedPermissions */
+    });
+  workspacePermissionHydration.set(workspaceId, hydration);
+  return hydration;
+}
+
+async function savePersistedPermissions(workspaceId: string): Promise<void> {
+  if (!permissionPersistenceEnabled) return;
+  const permissions = permissionManager.serializeWorkspace(workspaceId);
+  if (!permissions) return;
+  try {
+    await fetch(`${PLATFORM_BASE_URL}/api/collab/internal/permissions`, {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        'x-internal-proxy-secret': PLATFORM_INTERNAL_SECRET,
+      },
+      body: JSON.stringify({ workspaceId, permissions }),
+    });
+  } catch (error) {
+    console.warn('[colab] failed to persist permissions', {
+      workspaceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function schedulePermissionPersist(workspaceId: string): void {
+  if (!permissionPersistenceEnabled) return;
+  const existing = permissionSaveTimers.get(workspaceId);
+  if (existing) clearTimeout(existing);
+  permissionSaveTimers.set(
+    workspaceId,
+    setTimeout(() => {
+      permissionSaveTimers.delete(workspaceId);
+      void savePersistedPermissions(workspaceId);
+    }, 500),
+  );
+}
+
 const EMPTY_WORKSPACE_RETENTION_MS_RAW = Number(process.env.COLAB_EMPTY_WORKSPACE_RETENTION_MS);
 const EMPTY_WORKSPACE_RETENTION_MS =
   Number.isFinite(EMPTY_WORKSPACE_RETENTION_MS_RAW) && EMPTY_WORKSPACE_RETENTION_MS_RAW >= 0
@@ -531,6 +618,19 @@ function deleteWorkspaceState(workspaceId: string): void {
   workspaces.delete(workspaceId);
   workspaceLocks.delete(workspaceId);
   workspaceSharedState.delete(workspaceId);
+  // Drop in-memory permissions only — the durable copy remains in the platform DB and is
+  // re-hydrated on the next cold join. Flush any pending debounced save first so a
+  // permission edit right before the room emptied isn't lost. (savePersistedPermissions
+  // serializes synchronously before its first await, so the snapshot is captured before
+  // the deleteWorkspace below wipes in-memory state.) Clear the cached hydration promise
+  // so the next cold join re-reads the DB rather than reusing this run's resolved promise.
+  const pendingSave = permissionSaveTimers.get(workspaceId);
+  if (pendingSave) {
+    clearTimeout(pendingSave);
+    permissionSaveTimers.delete(workspaceId);
+    void savePersistedPermissions(workspaceId);
+  }
+  workspacePermissionHydration.delete(workspaceId);
   permissionManager.deleteWorkspace(workspaceId);
 }
 
@@ -755,8 +855,12 @@ nextApp.prepare().then(() => {
               workspaces.set(workspaceId, new Map());
               workspaceLocks.set(workspaceId, new Map());
               permissionManager.initializeWorkspace(workspaceId);
+              ensurePermissionsHydrated(workspaceId);
             }
             ensureWorkspaceSharedState(workspaceId);
+            // Load durable permissions before assigning roles / sending shared state, so a
+            // reconnecting workspace doesn't briefly serve default (reset) permissions.
+            await ensurePermissionsHydrated(workspaceId);
 
             const workspaceUsers = workspaces.get(workspaceId) as Map<string, ClientState>;
             const existingUserSessions = getWorkspaceClientsByUserId(workspaceId, userId);
@@ -769,7 +873,9 @@ nextApp.prepare().then(() => {
               permissionManager.setUserAsAdmin(workspaceId, userId);
             } else if (role === 'TEACHER') {
               permissionManager.setUserAsTeacher(workspaceId, userId);
-            } else {
+            } else if (!permissionManager.hasUserOverride(workspaceId, userId)) {
+              // STUDENT: keep any teacher-set (now persisted) per-user override across a
+              // reconnect; only fall back to the global baseline when none exists.
               permissionManager.clearUserPermissions(workspaceId, userId);
             }
 
@@ -860,6 +966,7 @@ nextApp.prepare().then(() => {
               ws.send(JSON.stringify({ type: 'error', message: 'Role escalation denied' }));
               return;
             }
+            schedulePermissionPersist(workspaceId);
 
             const updatedPerms = permissionManager.getUserPermissions(workspaceId, userId);
             const currentUserClients = getWorkspaceClientsByUserId(workspaceId, userId);
@@ -931,6 +1038,7 @@ nextApp.prepare().then(() => {
             if (!canChange) return;
 
             permissionManager.updateGlobalPermission(workspaceId, data.permission, data.value);
+            schedulePermissionPersist(workspaceId);
 
             const wsUsers = workspaces.get(workspaceId);
             if (wsUsers) {
@@ -969,6 +1077,7 @@ nextApp.prepare().then(() => {
             if (!targetUserId) return;
 
             permissionManager.updateUserPermission(workspaceId, targetUserId, data.permission, data.value);
+            schedulePermissionPersist(workspaceId);
 
             const targetClients = getWorkspaceClientsByUserId(workspaceId, targetUserId);
             if (targetClients.length > 0) {
@@ -1007,6 +1116,7 @@ nextApp.prepare().then(() => {
 
             const mode = data.mode;
             permissionManager.applyPresetMode(workspaceId, mode);
+            schedulePermissionPersist(workspaceId);
 
             const wsUsers = workspaces.get(workspaceId);
             if (wsUsers) {
@@ -1164,6 +1274,24 @@ nextApp.prepare().then(() => {
             position,
             isDragging
           });
+        }
+
+        if (type === 'project_reloaded') {
+          // The host replaced the entire project (import/restore). Only an editor may
+          // trigger it. Tell every other client to reload the project fresh from
+          // persistence instead of reconciling the new project against their stale
+          // workspace/broadcast state (which otherwise spews "unavailable broadcast
+          // option" errors and half-merges the two projects).
+          if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
+            return;
+          }
+          const projectId = typeof data.projectId === 'string' ? data.projectId : '';
+          broadcastToWorkspace(workspaceId, clientConnectionId, {
+            type: 'project_reloaded',
+            userId,
+            projectId
+          });
+          return;
         }
 
         if (type === 'block_move') {
