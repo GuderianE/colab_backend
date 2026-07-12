@@ -5,6 +5,7 @@ import {
   deleteWorkspaceSharedState,
   ensureWorkspaceSharedState,
   getWorkspaceSharedStateVersion,
+  parsePersistedProjectBlob,
   parseSharedStatePayload,
   replaceWorkspaceSharedState,
   sharedStateToPayload,
@@ -190,6 +191,34 @@ test('replaceWorkspaceSharedState can adopt an explicit version (cold-hydrate)',
 
 test('getWorkspaceSharedStateVersion is 0 for an unknown workspace', () => {
   assert.equal(getWorkspaceSharedStateVersion('ws-never-seen'), 0);
+});
+
+test('parsePersistedProjectBlob parses a well-formed persisted blob', () => {
+  const parsed = parsePersistedProjectBlob({
+    version: 7,
+    sharedState: {
+      elements: [element({ elementType: 'sprite', elementId: 's1' })],
+      spriteMetrics: [metrics('s1')],
+      workspaceSnapshots: [snapshot('s1')]
+    }
+  });
+  assert.notEqual(parsed, null);
+  assert.equal(parsed?.version, 7);
+  assert.equal(parsed?.payload.elements.length, 1);
+});
+
+test('parsePersistedProjectBlob defaults a missing version to 0', () => {
+  const parsed = parsePersistedProjectBlob({
+    sharedState: { elements: [], spriteMetrics: [], workspaceSnapshots: [] }
+  });
+  assert.equal(parsed?.version, 0);
+});
+
+test('parsePersistedProjectBlob is fail-closed on garbage', () => {
+  assert.equal(parsePersistedProjectBlob(null), null);
+  assert.equal(parsePersistedProjectBlob('nope'), null);
+  assert.equal(parsePersistedProjectBlob({ version: 1 }), null); // no sharedState
+  assert.equal(parsePersistedProjectBlob({ version: 1, sharedState: { elements: 'bad' } }), null);
 });
 
 test('replaceWorkspaceSharedState with an empty payload clears the workspace', () => {

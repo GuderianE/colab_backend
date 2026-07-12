@@ -206,6 +206,18 @@ export function parseSharedStatePayload(raw: unknown): WorkspaceSharedStatePaylo
   return { elements, spriteMetrics, workspaceSnapshots };
 }
 
+// Defensively parse a persisted project blob (`{ version, sharedState }`) loaded from durable
+// storage for cold-hydrate. Fail-closed like parseSharedStatePayload: any structural problem
+// returns null so a corrupt blob seeds nothing rather than a broken project.
+export function parsePersistedProjectBlob(
+  raw: unknown
+): { version: number; payload: WorkspaceSharedStatePayload } | null {
+  if (!isRecord(raw)) return null;
+  const payload = parseSharedStatePayload(raw.sharedState);
+  if (!payload) return null;
+  return { version: asNumber(raw.version), payload };
+}
+
 export function sharedStateToPayload(state: WorkspaceSharedState): WorkspaceSharedStatePayload {
   return {
     elements: Array.from(state.elements.values()),

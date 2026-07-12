@@ -9,11 +9,14 @@ import type { Coordinates, PermissionSet, UserRole } from './types/collaboration
 import {
   deleteWorkspaceSharedState,
   ensureWorkspaceSharedState,
+  getWorkspaceSharedStateVersion,
+  parsePersistedProjectBlob,
   parseSharedStatePayload,
   replaceWorkspaceSharedState,
   sharedStateToPayload,
   type WorkspaceElementState,
   type WorkspaceSharedState,
+  type WorkspaceSharedStatePayload,
   type WorkspaceSnapshotState,
   type WorkspaceSpriteMetrics
 } from './shared-state';
@@ -147,6 +150,100 @@ function schedulePermissionPersist(workspaceId: string): void {
       permissionSaveTimers.delete(workspaceId);
       void savePersistedPermissions(workspaceId);
     }, 500),
+  );
+}
+
+// --- Durable project persistence (single writer) --------------------------------------------
+// The backend is the SOLE durable writer of the collab group project: it mirrors the workspace
+// shared-state to Storj via the platform internal API — debounced during editing, and flushed on
+// empty-room eviction — and cold-hydrates from it on the first join. This makes the backend
+// shared-state the single source of truth and stops a stale editor from clobbering durable
+// storage. Uses the same env as permission persistence (PLATFORM_BASE_URL + internal secret).
+const projectPersistenceEnabled = permissionPersistenceEnabled;
+const projectSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const workspaceProjectHydration = new Map<string, Promise<void>>();
+
+function isSharedStateEmpty(state: WorkspaceSharedState): boolean {
+  return state.elements.size === 0 && state.spriteMetrics.size === 0 && state.workspaceSnapshots.size === 0;
+}
+
+async function loadPersistedProject(
+  workspaceId: string,
+): Promise<{ version: number; payload: WorkspaceSharedStatePayload } | null> {
+  if (!projectPersistenceEnabled) return null;
+  try {
+    const res = await fetch(
+      `${PLATFORM_BASE_URL}/api/collab/internal/project?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { headers: { 'x-internal-proxy-secret': PLATFORM_INTERNAL_SECRET } },
+    );
+    if (!res.ok) return null;
+    return parsePersistedProjectBlob(await res.json());
+  } catch (error) {
+    console.warn('[colab] failed to load persisted project', {
+      workspaceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+// Load-once-per-cold-workspace. Only seeds a genuinely empty shared-state, so a live session's
+// state is never clobbered by a late hydration; concurrent joiners await the same promise.
+function ensureProjectHydrated(workspaceId: string): Promise<void> {
+  const existing = workspaceProjectHydration.get(workspaceId);
+  if (existing) return existing;
+  const hydration = loadPersistedProject(workspaceId)
+    .then((persisted) => {
+      if (!persisted) return;
+      const state = ensureWorkspaceSharedState(workspaceId);
+      if (isSharedStateEmpty(state)) {
+        replaceWorkspaceSharedState(workspaceId, persisted.payload, { version: persisted.version });
+      }
+    })
+    .catch(() => {
+      /* already logged in loadPersistedProject */
+    });
+  workspaceProjectHydration.set(workspaceId, hydration);
+  return hydration;
+}
+
+async function savePersistedProject(workspaceId: string): Promise<void> {
+  if (!projectPersistenceEnabled) return;
+  // Capture synchronously (before the first await) so a flush-then-delete on eviction still
+  // persists the final state.
+  const payload = sharedStateToPayload(ensureWorkspaceSharedState(workspaceId));
+  const version = getWorkspaceSharedStateVersion(workspaceId);
+  // Never overwrite a real backup with an empty project (e.g. a spurious flush before any seed).
+  if (payload.elements.length === 0 && payload.spriteMetrics.length === 0 && payload.workspaceSnapshots.length === 0) {
+    return;
+  }
+  try {
+    await fetch(`${PLATFORM_BASE_URL}/api/collab/internal/project`, {
+      method: 'PUT',
+      headers: {
+        'content-type': 'application/json',
+        'x-internal-proxy-secret': PLATFORM_INTERNAL_SECRET,
+      },
+      body: JSON.stringify({ workspaceId, version, sharedState: payload }),
+    });
+  } catch (error) {
+    console.warn('[colab] failed to persist project', {
+      workspaceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function scheduleProjectPersist(workspaceId: string): void {
+  if (!projectPersistenceEnabled) return;
+  const existing = projectSaveTimers.get(workspaceId);
+  if (existing) clearTimeout(existing);
+  projectSaveTimers.set(
+    workspaceId,
+    setTimeout(() => {
+      projectSaveTimers.delete(workspaceId);
+      void savePersistedProject(workspaceId);
+    }, 1_000),
   );
 }
 
@@ -570,6 +667,18 @@ function deleteWorkspaceState(workspaceId: string): void {
   clearWorkspaceCleanupTimer(workspaceId);
   workspaces.delete(workspaceId);
   workspaceLocks.delete(workspaceId);
+  // Flush the project to durable storage BEFORE dropping the shared-state, so end-of-day work is
+  // never lost on empty-room eviction. savePersistedProject serializes the payload synchronously
+  // before its first await, so the snapshot is captured even though we delete the state below.
+  // Run it unconditionally (not only when a debounced save is pending): the last edit may have
+  // already been saved, but an empty/no-op flush is cheap and guarded inside savePersistedProject.
+  const pendingProjectSave = projectSaveTimers.get(workspaceId);
+  if (pendingProjectSave) {
+    clearTimeout(pendingProjectSave);
+    projectSaveTimers.delete(workspaceId);
+  }
+  void savePersistedProject(workspaceId);
+  workspaceProjectHydration.delete(workspaceId);
   deleteWorkspaceSharedState(workspaceId);
   // Drop in-memory permissions only — the durable copy remains in the platform DB and is
   // re-hydrated on the next cold join. Flush any pending debounced save first so a
@@ -797,11 +906,14 @@ nextApp.prepare().then(() => {
               workspaceLocks.set(workspaceId, new Map());
               permissionManager.initializeWorkspace(workspaceId);
               ensurePermissionsHydrated(workspaceId);
+              ensureProjectHydrated(workspaceId);
             }
             ensureWorkspaceSharedState(workspaceId);
-            // Load durable permissions before assigning roles / sending shared state, so a
-            // reconnecting workspace doesn't briefly serve default (reset) permissions.
+            // Load durable permissions AND cold-hydrate the project shared-state before assigning
+            // roles / sending the snapshot, so the first joiner receives the persisted project as
+            // the authority (and never a stale-default / empty snapshot).
             await ensurePermissionsHydrated(workspaceId);
+            await ensureProjectHydrated(workspaceId);
 
             const workspaceUsers = workspaces.get(workspaceId) as Map<string, ClientState>;
             const existingUserSessions = getWorkspaceClientsByUserId(workspaceId, userId);
@@ -916,6 +1028,7 @@ nextApp.prepare().then(() => {
             // REPLACE); the initiating host already holds this project locally.
             broadcastToWorkspace(workspaceId, clientConnectionId, { type: 'shared_state', sharedState });
             ws.send(JSON.stringify({ type: 'replace_shared_state_accepted' }));
+            scheduleProjectPersist(workspaceId);
             break;
           }
 
@@ -1543,6 +1656,7 @@ nextApp.prepare().then(() => {
             firstEditedBy: spriteMetrics?.firstEditedBy,
             firstEditedAt: spriteMetrics?.firstEditedAt
           });
+          scheduleProjectPersist(workspaceId);
         }
 
         if (type === 'stack_move') {
@@ -1646,6 +1760,7 @@ nextApp.prepare().then(() => {
             spriteMetricsFirstEditedBy: spriteMetricState?.firstEditedBy,
             spriteMetricsFirstEditedAt: spriteMetricState?.firstEditedAt
           });
+          scheduleProjectPersist(workspaceId);
         }
 
         if (type === 'delete_element') {
@@ -1693,6 +1808,7 @@ nextApp.prepare().then(() => {
             firstEditedBy,
             firstEditedAt
           });
+          scheduleProjectPersist(workspaceId);
         }
 
         if (type === 'workspace_snapshot') {
@@ -1794,6 +1910,7 @@ nextApp.prepare().then(() => {
             firstEditedBy,
             firstEditedAt
           });
+          scheduleProjectPersist(workspaceId);
         }
       } catch (error) {
         logSocketErrorEvent('message_processing_error', connectionState, error);
