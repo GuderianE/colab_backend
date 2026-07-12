@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   deleteWorkspaceSharedState,
   ensureWorkspaceSharedState,
+  getWorkspaceSharedStateVersion,
   parseSharedStatePayload,
   replaceWorkspaceSharedState,
   sharedStateToPayload,
@@ -155,6 +156,40 @@ test('parseSharedStatePayload rejects entries missing their id fields (fail-clos
   assert.equal(parseSharedStatePayload({ elements: [{ elementId: 's1' }] }), null); // no elementType
   assert.equal(parseSharedStatePayload({ spriteMetrics: [{ x: 1, y: 2 }] }), null); // no spriteId
   assert.equal(parseSharedStatePayload({ workspaceSnapshots: [{ serializedJson: '{}' }] }), null); // no spriteId
+});
+
+test('a fresh workspace shared-state starts at version 0', () => {
+  const workspaceId = 'ws-version-fresh';
+  ensureWorkspaceSharedState(workspaceId);
+  assert.equal(getWorkspaceSharedStateVersion(workspaceId), 0);
+  deleteWorkspaceSharedState(workspaceId);
+});
+
+test('replaceWorkspaceSharedState advances the version on each replace', () => {
+  const workspaceId = 'ws-version-advance';
+  const payload: WorkspaceSharedStatePayload = { elements: [], spriteMetrics: [], workspaceSnapshots: [] };
+
+  replaceWorkspaceSharedState(workspaceId, payload);
+  assert.equal(getWorkspaceSharedStateVersion(workspaceId), 1);
+  replaceWorkspaceSharedState(workspaceId, payload);
+  assert.equal(getWorkspaceSharedStateVersion(workspaceId), 2);
+  deleteWorkspaceSharedState(workspaceId);
+});
+
+test('replaceWorkspaceSharedState can adopt an explicit version (cold-hydrate)', () => {
+  const workspaceId = 'ws-version-hydrate';
+  const payload: WorkspaceSharedStatePayload = { elements: [], spriteMetrics: [], workspaceSnapshots: [] };
+
+  replaceWorkspaceSharedState(workspaceId, payload, { version: 42 });
+  assert.equal(getWorkspaceSharedStateVersion(workspaceId), 42);
+  // A subsequent live replace advances from the hydrated version, not from 0.
+  replaceWorkspaceSharedState(workspaceId, payload);
+  assert.equal(getWorkspaceSharedStateVersion(workspaceId), 43);
+  deleteWorkspaceSharedState(workspaceId);
+});
+
+test('getWorkspaceSharedStateVersion is 0 for an unknown workspace', () => {
+  assert.equal(getWorkspaceSharedStateVersion('ws-never-seen'), 0);
 });
 
 test('replaceWorkspaceSharedState with an empty payload clears the workspace', () => {

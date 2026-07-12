@@ -48,6 +48,9 @@ export type WorkspaceSharedState = {
   elements: Map<string, WorkspaceElementState>;
   spriteMetrics: Map<string, WorkspaceSpriteMetrics>;
   workspaceSnapshots: Map<string, WorkspaceSnapshotState>;
+  // Monotonic version of the whole project. Advances on every authoritative REPLACE; used by
+  // the single-writer persistence layer to reject a stale write (never lower a newer version).
+  version: number;
 };
 
 export type WorkspaceSharedStatePayload = {
@@ -87,11 +90,16 @@ export function ensureWorkspaceSharedState(workspaceId: string): WorkspaceShared
     workspaceSharedState.set(workspaceId, {
       elements: new Map(),
       spriteMetrics: new Map(),
-      workspaceSnapshots: new Map()
+      workspaceSnapshots: new Map(),
+      version: 0
     });
   }
 
   return workspaceSharedState.get(workspaceId) as WorkspaceSharedState;
+}
+
+export function getWorkspaceSharedStateVersion(workspaceId: string): number {
+  return workspaceSharedState.get(workspaceId)?.version ?? 0;
 }
 
 export function deleteWorkspaceSharedState(workspaceId: string): void {
@@ -104,12 +112,18 @@ export function deleteWorkspaceSharedState(workspaceId: string): void {
 // property the single-source-of-truth model depends on). Returns the new state.
 export function replaceWorkspaceSharedState(
   workspaceId: string,
-  payload: WorkspaceSharedStatePayload
+  payload: WorkspaceSharedStatePayload,
+  options?: { version?: number }
 ): WorkspaceSharedState {
+  // Version: adopt an explicit version when cold-hydrating from persisted state; otherwise this
+  // is a live authoritative REPLACE (e.g. teacher import) that advances past the current version.
+  const previousVersion = workspaceSharedState.get(workspaceId)?.version ?? 0;
+  const version = options?.version ?? previousVersion + 1;
   const state: WorkspaceSharedState = {
     elements: new Map(payload.elements.map((element) => [elementStateKey(element), element])),
     spriteMetrics: new Map(payload.spriteMetrics.map((metric) => [metric.spriteId, metric])),
-    workspaceSnapshots: new Map(payload.workspaceSnapshots.map((snapshot) => [snapshot.spriteId, snapshot]))
+    workspaceSnapshots: new Map(payload.workspaceSnapshots.map((snapshot) => [snapshot.spriteId, snapshot])),
+    version
   };
   workspaceSharedState.set(workspaceId, state);
   return state;
