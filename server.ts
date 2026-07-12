@@ -9,6 +9,8 @@ import type { Coordinates, PermissionSet, UserRole } from './types/collaboration
 import {
   deleteWorkspaceSharedState,
   ensureWorkspaceSharedState,
+  parseSharedStatePayload,
+  replaceWorkspaceSharedState,
   sharedStateToPayload,
   type WorkspaceElementState,
   type WorkspaceSharedState,
@@ -889,6 +891,31 @@ nextApp.prepare().then(() => {
                 sharedState: sharedStateToPayload(ensureWorkspaceSharedState(workspaceId))
               })
             );
+            break;
+          }
+
+          case 'replace_shared_state': {
+            if (!isAuthenticated || !workspaceId || !userId) return;
+            // Authoritative full-project REPLACE (teacher import / emergency reset). Only a host
+            // who can restructure the project (canEditBlocks) may overwrite the whole shared
+            // state; students editing within it must never wipe everyone's project.
+            if (!permissionManager.hasPermission(workspaceId, userId, 'canEditBlocks')) {
+              ws.send(JSON.stringify({ type: 'error', message: 'Not allowed to replace shared state' }));
+              return;
+            }
+            // Fail-closed on a malformed body: reject and keep the current project rather than
+            // REPLACE it with garbage.
+            const payload = parseSharedStatePayload(data.sharedState);
+            if (!payload) {
+              ws.send(JSON.stringify({ type: 'error', message: 'Invalid shared state payload' }));
+              return;
+            }
+            replaceWorkspaceSharedState(workspaceId, payload);
+            const sharedState = sharedStateToPayload(ensureWorkspaceSharedState(workspaceId));
+            // Broadcast the authoritative full state to every other member (they adopt it as a
+            // REPLACE); the initiating host already holds this project locally.
+            broadcastToWorkspace(workspaceId, clientConnectionId, { type: 'shared_state', sharedState });
+            ws.send(JSON.stringify({ type: 'replace_shared_state_accepted' }));
             break;
           }
 
