@@ -6,6 +6,15 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { jwtVerify, type JWTPayload } from 'jose';
 import PermissionManagerBackend from './permission-manager-backend';
 import type { Coordinates, PermissionSet, UserRole } from './types/collaboration';
+import {
+  deleteWorkspaceSharedState,
+  ensureWorkspaceSharedState,
+  sharedStateToPayload,
+  type WorkspaceElementState,
+  type WorkspaceSharedState,
+  type WorkspaceSnapshotState,
+  type WorkspaceSpriteMetrics
+} from './shared-state';
 
 type ClientState = {
   id: string;
@@ -51,52 +60,6 @@ const workspaces = new Map<string, Map<string, ClientState>>();
 const workspaceLocks = new Map<string, Map<string, { lockedBy: string; version: number }>>();
 const workspaceCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-type WorkspaceElementState = {
-  elementType: string;
-  elementId: string;
-  elementData: unknown;
-  version: number;
-  etag: string;
-  firstEditedBy: string;
-  firstEditedAt: number;
-  updatedBy: string;
-  updatedAt: number;
-};
-
-type WorkspaceSpriteMetrics = {
-  spriteId: string;
-  x: number;
-  y: number;
-  rotation?: number;
-  size?: number;
-  visible?: boolean;
-  version: number;
-  etag: string;
-  firstEditedBy: string;
-  firstEditedAt: number;
-  updatedBy: string;
-  updatedAt: number;
-};
-
-type WorkspaceSnapshotState = {
-  spriteId: string;
-  serializedJson: string;
-  blocksJson: unknown;
-  version: number;
-  etag: string;
-  firstEditedBy: string;
-  firstEditedAt: number;
-  updatedBy: string;
-  updatedAt: number;
-};
-
-type WorkspaceSharedState = {
-  elements: Map<string, WorkspaceElementState>;
-  spriteMetrics: Map<string, WorkspaceSpriteMetrics>;
-  workspaceSnapshots: Map<string, WorkspaceSnapshotState>;
-};
-
-const workspaceSharedState = new Map<string, WorkspaceSharedState>();
 const permissionManager = new PermissionManagerBackend();
 
 // --- Durable permission persistence -----------------------------------------------------
@@ -594,18 +557,6 @@ function hasWorkspaceSnapshotPermission(workspaceId: string, userId: string): bo
   );
 }
 
-function ensureWorkspaceSharedState(workspaceId: string): WorkspaceSharedState {
-  if (!workspaceSharedState.has(workspaceId)) {
-    workspaceSharedState.set(workspaceId, {
-      elements: new Map(),
-      spriteMetrics: new Map(),
-      workspaceSnapshots: new Map()
-    });
-  }
-
-  return workspaceSharedState.get(workspaceId) as WorkspaceSharedState;
-}
-
 function clearWorkspaceCleanupTimer(workspaceId: string): void {
   const existing = workspaceCleanupTimers.get(workspaceId);
   if (!existing) return;
@@ -617,7 +568,7 @@ function deleteWorkspaceState(workspaceId: string): void {
   clearWorkspaceCleanupTimer(workspaceId);
   workspaces.delete(workspaceId);
   workspaceLocks.delete(workspaceId);
-  workspaceSharedState.delete(workspaceId);
+  deleteWorkspaceSharedState(workspaceId);
   // Drop in-memory permissions only — the durable copy remains in the platform DB and is
   // re-hydrated on the next cold join. Flush any pending debounced save first so a
   // permission edit right before the room emptied isn't lost. (savePersistedPermissions
@@ -670,18 +621,6 @@ function resolveElementIdFromPayload(elementType: string, elementData: unknown, 
     }
   }
   return '';
-}
-
-function sharedStateToPayload(state: WorkspaceSharedState): {
-  elements: WorkspaceElementState[];
-  spriteMetrics: WorkspaceSpriteMetrics[];
-  workspaceSnapshots: WorkspaceSnapshotState[];
-} {
-  return {
-    elements: Array.from(state.elements.values()),
-    spriteMetrics: Array.from(state.spriteMetrics.values()),
-    workspaceSnapshots: Array.from(state.workspaceSnapshots.values())
-  };
 }
 
 nextApp.prepare().then(() => {
