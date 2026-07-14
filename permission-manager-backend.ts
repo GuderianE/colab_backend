@@ -1,4 +1,4 @@
-import { type PermissionKey, type PermissionSet, isPermissionKey } from './types/collaboration';
+import { PERMISSION_KEYS, type PermissionKey, type PermissionSet, isPermissionKey } from './types/collaboration';
 import type { UserRole } from './types/collaboration';
 
 type PresetMode = 'presentation' | 'work' | 'test' | 'restricted';
@@ -8,6 +8,16 @@ type WorkspacePermissionState = {
   userPermissions: Map<string, Partial<PermissionSet>>;
   isLocked: boolean;
 };
+
+/** Plain-JSON form of a workspace's permission state, for DB persistence. */
+export type SerializedWorkspacePermissionState = {
+  globalPermissions: PermissionSet;
+  userPermissions: Record<string, Partial<PermissionSet>>;
+  isLocked: boolean;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
 
 /**
  * Backend Permission Manager
@@ -260,5 +270,65 @@ export default class PermissionManagerBackend {
 
   deleteWorkspace(workspaceId: string): void {
     this.workspacePermissions.delete(workspaceId);
+  }
+
+  /**
+   * Snapshot a workspace's permission state as plain JSON for DB persistence. Returns
+   * null if the workspace has no state (nothing to persist).
+   */
+  serializeWorkspace(workspaceId: string): SerializedWorkspacePermissionState | null {
+    const workspace = this.workspacePermissions.get(workspaceId);
+    if (!workspace) return null;
+    const userPermissions: Record<string, Partial<PermissionSet>> = {};
+    workspace.userPermissions.forEach((overrides, userId) => {
+      userPermissions[userId] = { ...overrides };
+    });
+    return {
+      globalPermissions: { ...workspace.globalPermissions },
+      userPermissions,
+      isLocked: workspace.isLocked,
+    };
+  }
+
+  /**
+   * Replace a workspace's permission state from persisted JSON (defensively — unknown or
+   * missing keys are dropped, and any global key absent from the stored blob falls back to
+   * the safe default). Returns true if a valid state was applied.
+   */
+  hydrateWorkspace(workspaceId: string, raw: unknown): boolean {
+    if (!isRecord(raw)) return false;
+
+    const globalPermissions: PermissionSet = { ...this.DEFAULT_PERMISSIONS };
+    if (isRecord(raw.globalPermissions)) {
+      for (const key of PERMISSION_KEYS) {
+        const value = raw.globalPermissions[key];
+        if (typeof value === 'boolean') {
+          globalPermissions[key] = value;
+        }
+      }
+    }
+
+    const userPermissions = new Map<string, Partial<PermissionSet>>();
+    if (isRecord(raw.userPermissions)) {
+      for (const [userId, overridesRaw] of Object.entries(raw.userPermissions)) {
+        if (!userId || !isRecord(overridesRaw)) continue;
+        const overrides: Partial<PermissionSet> = {};
+        for (const [key, value] of Object.entries(overridesRaw)) {
+          if (isPermissionKey(key) && typeof value === 'boolean') {
+            overrides[key] = value;
+          }
+        }
+        if (Object.keys(overrides).length > 0) {
+          userPermissions.set(userId, overrides);
+        }
+      }
+    }
+
+    this.workspacePermissions.set(workspaceId, {
+      globalPermissions,
+      userPermissions,
+      isLocked: typeof raw.isLocked === 'boolean' ? raw.isLocked : false,
+    });
+    return true;
   }
 }
