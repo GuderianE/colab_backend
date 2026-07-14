@@ -263,6 +263,41 @@ const HEARTBEAT_INTERVAL_MS =
     ? Math.floor(HEARTBEAT_INTERVAL_MS_RAW)
     : 30_000;
 
+// Event-loop lag watchdog. This server is single-threaded: every websocket
+// upgrade, message and broadcast runs on one thread. If anything blocks the loop
+// (a large synchronous serialize, a runaway loop, a long GC pause), new
+// connections stall behind it — the browser shows a long "waiting for server
+// response" with no other cause. A timer meant to fire every INTERVAL fires LATE
+// by exactly the block duration, so we log any lateness past the threshold with a
+// timestamp. That turns an intermittent stall into a greppable fact
+// (event:"event_loop_blocked") we can correlate with the log line before it.
+const EVENT_LOOP_MONITOR_INTERVAL_MS = 500;
+const EVENT_LOOP_LAG_WARN_MS_RAW = Number(process.env.COLAB_EVENT_LOOP_LAG_WARN_MS);
+const EVENT_LOOP_LAG_WARN_MS =
+  Number.isFinite(EVENT_LOOP_LAG_WARN_MS_RAW) && EVENT_LOOP_LAG_WARN_MS_RAW >= 1
+    ? Math.floor(EVENT_LOOP_LAG_WARN_MS_RAW)
+    : 1_000;
+
+let lastEventLoopTick = Date.now();
+const eventLoopMonitor = setInterval(() => {
+  const now = Date.now();
+  const blockedMs = now - lastEventLoopTick - EVENT_LOOP_MONITOR_INTERVAL_MS;
+  lastEventLoopTick = now;
+  if (blockedMs >= EVENT_LOOP_LAG_WARN_MS) {
+    console.warn(
+      JSON.stringify({
+        scope: 'colab_ws',
+        event: 'event_loop_blocked',
+        blockedMs,
+        thresholdMs: EVENT_LOOP_LAG_WARN_MS,
+        intervalMs: EVENT_LOOP_MONITOR_INTERVAL_MS,
+        timestamp: new Date(now).toISOString(),
+      }),
+    );
+  }
+}, EVENT_LOOP_MONITOR_INTERVAL_MS);
+eventLoopMonitor.unref?.();
+
 let nextConnectionOrdinal = 0;
 
 type JoinTicketPayload = JWTPayload & {
@@ -443,9 +478,18 @@ function broadcastToWorkspace(workspaceId: string, senderConnectionId: string | 
   const workspace = workspaces.get(workspaceId);
   if (!workspace) return;
 
+  // Serialize ONCE, not per-recipient. Snapshot broadcasts carry multi-MB
+  // blocksJson; re-stringifying inside the loop was O(clients × payload) of
+  // synchronous work on the single event-loop thread, which at class-start
+  // stalled the loop (and delayed new /ws upgrades).
+  const serialized = JSON.stringify(message);
   workspace.forEach((client, connectionId) => {
     if (connectionId !== senderConnectionId && client.ws.readyState === WebSocket.OPEN) {
-      client.ws.send(JSON.stringify(message));
+      try {
+        client.ws.send(serialized);
+      } catch {
+        // A single failing socket must not abort delivery to the rest of the room.
+      }
     }
   });
 }
@@ -646,6 +690,12 @@ function sendBlockTransportDenied(
     payload.lockedBy = params.lockedBy.trim();
   }
   ws.send(JSON.stringify(payload));
+}
+
+function isEmptyBlocksJson(blocksJson: unknown): boolean {
+  if (Array.isArray(blocksJson)) return blocksJson.length === 0;
+  if (isRecord(blocksJson)) return Object.keys(blocksJson).length === 0;
+  return true;
 }
 
 function hasWorkspaceSnapshotPermission(workspaceId: string, userId: string): boolean {
@@ -1865,6 +1915,24 @@ nextApp.prepare().then(() => {
             return;
           }
 
+          // Defense against the sprite-wipe data-loss path: a late joiner that never received
+          // a sprite renders it empty, and touching it emits an EMPTY snapshot. Never let an
+          // empty snapshot replace existing non-empty content — that silently destroys the real
+          // blocks for everyone. Normal edits keep content (non-empty), and a brand-new sprite
+          // has no existing snapshot, so only the destructive overwrite is blocked. The sender
+          // gets a conflict so it resyncs the authoritative state.
+          if (isEmptyBlocksJson(blocksJson) && existingSnapshot && !isEmptyBlocksJson(existingSnapshot.blocksJson)) {
+            sendEtagConflict(ws, {
+              entityType: 'workspace_snapshot',
+              entityId: spriteId,
+              ifMatch: submittedIfMatch,
+              currentEtag: existingSnapshot.etag,
+              firstEditedBy: existingSnapshot.firstEditedBy,
+              firstEditedAt: existingSnapshot.firstEditedAt
+            });
+            return;
+          }
+
           const version = (existingSnapshot?.version ?? 0) + 1;
           const eventId = eventIdRaw;
           const etag = buildEntityEtag(`workspace-snapshot:${spriteId}`, version);
@@ -2029,4 +2097,10 @@ nextApp.prepare().then(() => {
     console.log(`Server is running on port ${PORT}`);
     console.log('WebSocket server is ready');
   });
+}).catch((error) => {
+  // Previously prepare() had no catch: a failure was a silent unhandled
+  // rejection that left the process half-dead. Fail loudly so the orchestrator
+  // restarts it instead of serving a stuck instance.
+  console.error('Next.js prepare failed', error);
+  process.exit(1);
 });
